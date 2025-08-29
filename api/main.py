@@ -3,6 +3,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from datetime import datetime
 from urllib.request import urlretrieve
 from typing import List, Dict, Any, Optional, Tuple
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
@@ -25,6 +26,11 @@ from core.smart_clipping import get_smart_segments, analyze_video_intelligence
 from core.whisper_asr import get_asr_service, transcribe_video_file
 from core.semantic_analysis import get_semantic_analyzer, analyze_transcription_semantics
 from core.asr_smart_clipping import get_asr_smart_engine, select_segments_with_asr
+from core.xiaohongshu_pipeline import (
+    get_photo_ranking_service, get_storyline_generator, get_draft_generator
+)
+from core.subtitle_service import get_subtitle_generator, get_cover_service
+from core.export_service import get_export_service
 from routers.tasks import router as tasks_router
 
 # Setup logging
@@ -733,6 +739,105 @@ class ASRSmartClippingReq(BaseModel):
             raise ValueError('片段数量必须在1-5之间')
         return v
 
+class PhotoRankingReq(BaseModel):
+    photos: List[str]
+    top_k: int = 15
+    
+    @field_validator('photos')
+    @classmethod
+    def validate_photos(cls, v):
+        if not v:
+            raise ValueError('照片列表不能为空')
+        return v
+    
+    @field_validator('top_k')
+    @classmethod
+    def validate_top_k(cls, v):
+        if v < 1 or v > 50:
+            raise ValueError('选择数量必须在1-50之间')
+        return v
+
+class StorylineReq(BaseModel):
+    transcript_mmss: List[Dict]
+    notes: str
+    city: str = ""
+    date: str = ""
+    style: str = "治愈"
+    
+    @field_validator('transcript_mmss')
+    @classmethod
+    def validate_transcript(cls, v):
+        if not v:
+            raise ValueError('转录文本不能为空')
+        return v
+    
+    @field_validator('style')
+    @classmethod
+    def validate_style(cls, v):
+        valid_styles = ['治愈', '专业', '踩雷']
+        if v not in valid_styles:
+            raise ValueError(f'风格必须是: {", ".join(valid_styles)}')
+        return v
+
+class XHSDraftReq(BaseModel):
+    storyline: Dict
+    brand_tone: str = "治愈"
+    constraints: Optional[Dict] = None
+    
+    @field_validator('storyline')
+    @classmethod
+    def validate_storyline(cls, v):
+        if not v:
+            raise ValueError('故事线数据不能为空')
+        return v
+
+class SubtitleReq(BaseModel):
+    clips: List[Dict]
+    transcript_mmss: List[Dict]
+    style: str = "口语"
+    
+    @field_validator('style')
+    @classmethod
+    def validate_style(cls, v):
+        valid_styles = ['口语', '书面', '可爱']
+        if v not in valid_styles:
+            raise ValueError(f'字幕风格必须是: {", ".join(valid_styles)}')
+        return v
+
+class CoverReq(BaseModel):
+    clips: List[Dict]
+    photos_topk: List[Dict]
+    title: str = ""
+
+class ExportReq(BaseModel):
+    pipeline_result: Dict
+    export_format: str = "zip"
+    include_source: bool = False
+    
+    @field_validator('export_format')
+    @classmethod
+    def validate_format(cls, v):
+        valid_formats = ['json', 'zip', 'folder']
+        if v not in valid_formats:
+            raise ValueError(f'导出格式必须是: {", ".join(valid_formats)}')
+        return v
+
+class XHSPipelineReq(BaseModel):
+    video_url: str
+    photos: List[str] = []
+    notes: str = ""
+    city: str = ""
+    style: str = "治愈"
+    model_size: str = "base"
+    export_format: str = "zip"
+    
+    @field_validator('video_url')
+    @classmethod
+    def validate_video_url(cls, v):
+        if not v.strip():
+            raise ValueError('视频URL不能为空')
+        return v.strip()
+
 
 @app.post("/analyze_video")
 async def analyze_video(req: VideoAnalysisReq):
@@ -1101,6 +1206,312 @@ async def asr_enhanced_smart_clipping(req: ASRSmartClippingReq):
     except Exception as e:
         logger.error(f"ASR增强智能切片失败: {e}")
         raise HTTPException(status_code=500, detail=f"ASR增强智能切片失败: {str(e)}")
+
+
+@app.post("/xiaohongshu/photo_rank")
+async def photo_rank(req: PhotoRankingReq):
+    """照片选优排序"""
+    try:
+        logger.info(f"开始照片选优，共 {len(req.photos)} 张照片")
+        
+        photo_service = get_photo_ranking_service()
+        ranked_photos = photo_service.rank_photos(req.photos, req.top_k)
+        
+        return {
+            "status": "success",
+            "input_count": len(req.photos),
+            "output_count": len(ranked_photos),
+            "ranked_photos": ranked_photos,
+            "message": f"照片选优完成，返回前 {len(ranked_photos)} 张"
+        }
+        
+    except Exception as e:
+        logger.error(f"照片选优失败: {e}")
+        raise HTTPException(status_code=500, detail=f"照片选优失败: {str(e)}")
+
+
+@app.post("/xiaohongshu/storyline")
+async def generate_storyline(req: StorylineReq):
+    """生成旅行故事线"""
+    try:
+        logger.info(f"开始生成故事线 - 城市: {req.city}, 风格: {req.style}")
+        
+        storyline_gen = get_storyline_generator()
+        storyline = storyline_gen.generate_storyline(
+            req.transcript_mmss, req.notes, req.city, req.date, req.style
+        )
+        
+        return {
+            "status": "success",
+            "storyline": storyline,
+            "section_count": len(storyline.get('sections', [])),
+            "tip_count": len(storyline.get('tips', [])),
+            "poi_count": len(storyline.get('pois', [])),
+            "message": "故事线生成完成"
+        }
+        
+    except Exception as e:
+        logger.error(f"故事线生成失败: {e}")
+        raise HTTPException(status_code=500, detail=f"故事线生成失败: {str(e)}")
+
+
+@app.post("/xiaohongshu/draft")
+async def generate_xhs_draft(req: XHSDraftReq):
+    """生成小红书文案"""
+    try:
+        logger.info(f"开始生成小红书文案 - 调性: {req.brand_tone}")
+        
+        draft_gen = get_draft_generator()
+        draft = draft_gen.generate_draft(req.storyline, req.brand_tone, req.constraints)
+        
+        return {
+            "status": "success",
+            "draft": draft,
+            "metadata": draft.get('metadata', {}),
+            "message": "小红书文案生成完成"
+        }
+        
+    except Exception as e:
+        logger.error(f"文案生成失败: {e}")
+        raise HTTPException(status_code=500, detail=f"文案生成失败: {str(e)}")
+
+
+@app.post("/xiaohongshu/subtitles")
+async def generate_subtitles(req: SubtitleReq):
+    """生成字幕文件"""
+    try:
+        logger.info(f"开始生成字幕 - 风格: {req.style}")
+        
+        subtitle_gen = get_subtitle_generator()
+        subtitles = subtitle_gen.generate_subtitles(req.clips, req.transcript_mmss, req.style)
+        
+        return {
+            "status": "success",
+            "subtitles": subtitles,
+            "message": "字幕生成完成"
+        }
+        
+    except Exception as e:
+        logger.error(f"字幕生成失败: {e}")
+        raise HTTPException(status_code=500, detail=f"字幕生成失败: {str(e)}")
+
+
+@app.post("/xiaohongshu/cover")
+async def suggest_cover(req: CoverReq):
+    """生成封面建议"""
+    try:
+        logger.info(f"开始生成封面建议 - 标题: {req.title[:20]}...")
+        
+        cover_service = get_cover_service()
+        cover_suggestions = cover_service.suggest_cover(req.clips, req.photos_topk, req.title)
+        
+        return {
+            "status": "success",
+            "cover_suggestions": cover_suggestions,
+            "message": "封面建议生成完成"
+        }
+        
+    except Exception as e:
+        logger.error(f"封面建议生成失败: {e}")
+        raise HTTPException(status_code=500, detail=f"封面建议生成失败: {str(e)}")
+
+
+@app.post("/xiaohongshu/export")
+async def export_content(req: ExportReq):
+    """导出小红书内容产物"""
+    try:
+        logger.info(f"开始导出内容 - 格式: {req.export_format}")
+        
+        export_service = get_export_service()
+        export_result = export_service.export_xiaohongshu_content(
+            req.pipeline_result, req.export_format, req.include_source
+        )
+        
+        return {
+            "status": "success",
+            "export_result": export_result,
+            "message": "内容导出完成"
+        }
+        
+    except Exception as e:
+        logger.error(f"内容导出失败: {e}")
+        raise HTTPException(status_code=500, detail=f"内容导出失败: {str(e)}")
+
+
+@app.post("/xiaohongshu/pipeline")
+async def xiaohongshu_pipeline(req: XHSPipelineReq):
+    """小红书一键出稿完整流水线"""
+    try:
+        Path("input_data/downloads").mkdir(parents=True, exist_ok=True)
+        Path("output_data").mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"🎬 开始小红书一键出稿流水线 - 城市: {req.city}, 风格: {req.style}")
+        
+        # 处理输入文件
+        ts = int(time.time())
+        if req.video_url.startswith("file:"):
+            local_path = req.video_url.replace("file://", "")
+            if not Path(local_path).exists():
+                raise HTTPException(status_code=400, detail="本地文件不存在")
+            input_path = local_path
+        else:
+            input_path = str(Path("input_data/downloads") / f"xhs_pipeline_{ts}.mp4")
+            from urllib.request import urlretrieve
+            urlretrieve(req.video_url, input_path)
+        
+        pipeline_result = {
+            'source_video': input_path,
+            'processing_id': f'xhs_{ts}',
+            'created_at': datetime.now().isoformat()
+        }
+        
+        # 1. ASR语音识别
+        logger.info("步骤1: ASR语音识别...")
+        asr_service = get_asr_service(model_size=req.model_size)
+        transcription_result = asr_service.transcribe_video(input_path, cleanup_audio=True)
+        
+        # 转换为带时间戳格式
+        transcript_mmss = []
+        for segment in transcription_result.get('segments', []):
+            transcript_mmss.append({
+                'start': segment.get('start', 0),
+                'end': segment.get('end', 0),
+                'text': segment.get('text', ''),
+                'timestamp': f"{int(segment.get('start', 0)//60):02d}:{int(segment.get('start', 0)%60):02d}"
+            })
+        
+        pipeline_result['transcription'] = transcription_result
+        pipeline_result['transcript_mmss'] = transcript_mmss
+        
+        # 2. 智能选段
+        logger.info("步骤2: ASR增强智能选段...")
+        asr_engine = get_asr_smart_engine()
+        selected_segments = asr_engine.select_best_segments_with_asr(
+            input_path, transcription_result, 15, 30, 2  # 生成2个15-30秒片段
+        )
+        
+        if not selected_segments:
+            raise HTTPException(status_code=400, detail="未找到符合条件的视频片段")
+        
+        # 生成视频片段
+        generated_clips = []
+        for i, segment in enumerate(selected_segments):
+            output_filename = f"xhs_clip_{ts}_{i+1:02d}.mp4"
+            output_path = f"output_data/{output_filename}"
+            
+            start_time = segment['start_hms']
+            duration = segment['duration']
+            
+            # 使用pad-first策略生成9:16视频
+            fade_out_start = max(0.1, duration - 0.25)
+            vf_filters = (
+                "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p,setsar=1:1,"
+                f"fade=t=in:st=0:d=0.25,fade=t=out:st={fade_out_start:.2f}:d=0.25"
+            )
+            
+            cmd = [
+                "ffmpeg", "-y", "-hwaccel", "none",
+                "-i", input_path,
+                "-ss", start_time, "-t", f"{duration:.2f}",
+                "-vf", vf_filters,
+                "-pix_fmt", "yuv420p",
+                "-map", "0:v:0", "-map", "0:a?",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", str(VIDEO_CRF),
+                "-c:a", "aac", "-b:a", AUDIO_BITRATE,
+                "-shortest", "-movflags", "+faststart",
+                output_path
+            ]
+            
+            safe_run_ffmpeg(cmd)
+            
+            file_size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
+            
+            generated_clips.append({
+                "clip_index": i + 1,
+                "output_path": output_path,
+                "start_time": start_time,
+                "start_time_seconds": segment['start_time'],
+                "end_time_seconds": segment['end_time'],
+                "duration": duration,
+                "file_size": file_size
+            })
+        
+        pipeline_result['clips'] = generated_clips
+        
+        # 3. 照片选优（如果有照片）
+        if req.photos:
+            logger.info("步骤3: 照片选优...")
+            photo_service = get_photo_ranking_service()
+            ranked_photos = photo_service.rank_photos(req.photos, 10)
+            pipeline_result['photos_ranked'] = ranked_photos
+        else:
+            pipeline_result['photos_ranked'] = []
+        
+        # 4. 故事线生成
+        logger.info("步骤4: 生成故事线...")
+        storyline_gen = get_storyline_generator()
+        storyline = storyline_gen.generate_storyline(
+            transcript_mmss, req.notes, req.city, "", req.style
+        )
+        pipeline_result['storyline'] = storyline
+        
+        # 5. 小红书文案生成
+        logger.info("步骤5: 生成小红书文案...")
+        draft_gen = get_draft_generator()
+        draft = draft_gen.generate_draft(storyline, req.style)
+        pipeline_result['draft'] = draft
+        
+        # 6. 字幕生成
+        logger.info("步骤6: 生成字幕...")
+        subtitle_gen = get_subtitle_generator()
+        subtitles = subtitle_gen.generate_subtitles(generated_clips, transcript_mmss, "可爱")
+        pipeline_result['subtitles'] = subtitles
+        
+        # 7. 封面建议
+        logger.info("步骤7: 生成封面建议...")
+        cover_service = get_cover_service()
+        cover_suggestions = cover_service.suggest_cover(
+            generated_clips, pipeline_result['photos_ranked'], draft['title']
+        )
+        pipeline_result['cover'] = cover_suggestions
+        
+        # 8. 导出产物
+        logger.info("步骤8: 导出内容产物...")
+        export_service = get_export_service()
+        export_result = export_service.export_xiaohongshu_content(
+            pipeline_result, req.export_format, False
+        )
+        
+        return {
+            "status": "success",
+            "pipeline_result": {
+                'processing_id': pipeline_result['processing_id'],
+                'transcription_summary': {
+                    'language': transcription_result['language'],
+                    'duration': transcription_result['duration'],
+                    'word_count': transcription_result['word_count']
+                },
+                'clips_generated': len(generated_clips),
+                'photos_ranked': len(pipeline_result['photos_ranked']),
+                'storyline_sections': len(storyline.get('sections', [])),
+                'draft_info': {
+                    'title': draft['title'],
+                    'hashtag_count': len(draft.get('hashtags', [])),
+                    'word_count': draft.get('metadata', {}).get('word_count', 0)
+                },
+                'subtitle_files': len(subtitles.get('srt_files', [])),
+                'export_info': export_result
+            },
+            "download_links": export_result.get('share_urls', {}),
+            "message": f"🎉 小红书一键出稿完成！生成了 {len(generated_clips)} 个视频片段和完整文案"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"小红书流水线失败: {e}")
+        raise HTTPException(status_code=500, detail=f"小红书流水线失败: {str(e)}")
 
 
 @app.post("/auto_intro")
