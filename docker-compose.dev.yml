@@ -1,0 +1,102 @@
+version: '3.8'
+
+# 开发环境配置
+# 使用方法: docker-compose -f docker-compose.dev.yml up
+
+services:
+  # Redis服务
+  redis:
+    image: redis:7-alpine
+    container_name: ai-video-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_dev_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - ai-video-dev-network
+
+  # API服务 - 开发模式
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: ai-video-api-dev
+    ports:
+      - "8000:8000"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - DEBUG=true
+      - RELOAD=true
+    volumes:
+      - .:/app  # 挂载整个项目目录以支持热重载
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - ai-video-dev-network
+
+  # Worker服务 - 开发模式
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: ai-video-worker-dev
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - C_FORCE_ROOT=1
+    volumes:
+      - .:/app  # 挂载整个项目目录
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    command: celery -A worker.celery_app worker --loglevel=debug --concurrency=1
+    networks:
+      - ai-video-dev-network
+
+  # Flower监控
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: ai-video-flower-dev
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+    command: celery -A worker.celery_app flower --basic-auth=admin:admin123
+    networks:
+      - ai-video-dev-network
+
+  # MinIO - 轻量级配置
+  minio:
+    image: minio/minio:latest
+    container_name: ai-video-minio-dev
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin123
+    volumes:
+      - minio_dev_data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - ai-video-dev-network
+
+networks:
+  ai-video-dev-network:
+    driver: bridge
+
+volumes:
+  redis_dev_data:
+    driver: local
+  minio_dev_data:
+    driver: local
