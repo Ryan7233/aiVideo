@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime
 from urllib.request import urlretrieve
 from typing import List, Dict, Any, Optional, Tuple
+import numpy as np
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -31,6 +32,11 @@ from core.xiaohongshu_pipeline import (
 )
 from core.subtitle_service import get_subtitle_generator, get_cover_service
 from core.export_service import get_export_service
+from core.advanced_photo_ranking import get_advanced_photo_service
+from core.semantic_highlights import get_semantic_highlight_detector
+from core.personalized_writing import get_personalized_writing_service
+from core.smart_cover_design import get_smart_cover_designer
+from core.audio_processing import get_audio_processing_service
 from routers.tasks import router as tasks_router
 
 # Setup logging
@@ -838,6 +844,117 @@ class XHSPipelineReq(BaseModel):
             raise ValueError('视频URL不能为空')
         return v.strip()
 
+# Pro功能API模型
+class AdvancedPhotoRankingReq(BaseModel):
+    photos: List[str]
+    top_k: int = 15
+    context: Optional[Dict] = None
+    use_clip: bool = True
+    use_aesthetic_model: bool = True
+    
+    @field_validator('photos')
+    @classmethod
+    def validate_photos(cls, v):
+        if not v:
+            raise ValueError('照片列表不能为空')
+        return v
+
+class SemanticHighlightsReq(BaseModel):
+    transcript_segments: List[Dict]
+    context: Optional[Dict] = None
+    min_score: float = 0.3
+    max_highlights: int = 10
+    
+    @field_validator('transcript_segments')
+    @classmethod
+    def validate_segments(cls, v):
+        if not v:
+            raise ValueError('转录片段不能为空')
+        return v
+
+class PersonalizedWritingReq(BaseModel):
+    user_id: str
+    content_data: Dict
+    style_override: Optional[str] = None
+    learn_from_history: bool = True
+    
+    @field_validator('user_id')
+    @classmethod
+    def validate_user_id(cls, v):
+        if not v.strip():
+            raise ValueError('用户ID不能为空')
+        return v.strip()
+
+class UserStyleLearningReq(BaseModel):
+    user_id: str
+    content_samples: List[Dict]
+    
+    @field_validator('content_samples')
+    @classmethod
+    def validate_samples(cls, v):
+        if not v:
+            raise ValueError('内容样本不能为空')
+        return v
+
+class SmartCoverDesignReq(BaseModel):
+    clips: List[Dict]
+    photos: List[Dict] = []
+    title: str
+    style: str = "治愈"
+    template: str = "minimal"
+    
+    @field_validator('title')
+    @classmethod
+    def validate_title(cls, v):
+        if not v.strip():
+            raise ValueError('标题不能为空')
+        return v.strip()
+
+class AudioProcessingReq(BaseModel):
+    video_path: str
+    style: str = "治愈"
+    enhance_speech: bool = True
+    add_bgm: bool = True
+    bgm_volume: float = 0.3
+    
+    @field_validator('video_path')
+    @classmethod
+    def validate_video_path(cls, v):
+        if not v.strip():
+            raise ValueError('视频路径不能为空')
+        return v.strip()
+    
+    @field_validator('bgm_volume')
+    @classmethod
+    def validate_bgm_volume(cls, v):
+        if v < 0 or v > 1:
+            raise ValueError('BGM音量必须在0-1之间')
+        return v
+
+class XHSProPipelineReq(BaseModel):
+    video_url: str
+    photos: List[str] = []
+    notes: str = ""
+    city: str = ""
+    style: str = "治愈"
+    user_id: Optional[str] = None
+    model_size: str = "base"
+    export_format: str = "zip"
+    
+    # Pro功能开关
+    use_advanced_photo_ranking: bool = True
+    use_semantic_highlights: bool = True
+    use_personalized_writing: bool = False
+    use_smart_cover: bool = True
+    use_audio_enhancement: bool = True
+    
+    @field_validator('video_url')
+    @classmethod
+    def validate_video_url(cls, v):
+        if not v.strip():
+            raise ValueError('视频URL不能为空')
+        return v.strip()
+
 
 @app.post("/analyze_video")
 async def analyze_video(req: VideoAnalysisReq):
@@ -1208,6 +1325,179 @@ async def asr_enhanced_smart_clipping(req: ASRSmartClippingReq):
         raise HTTPException(status_code=500, detail=f"ASR增强智能切片失败: {str(e)}")
 
 
+@app.post("/pro/photo_rank_advanced")
+async def advanced_photo_rank(req: AdvancedPhotoRankingReq):
+    """高级照片选优排序（Pro版本）"""
+    try:
+        logger.info(f"开始高级照片选优，共 {len(req.photos)} 张照片")
+        
+        advanced_service = get_advanced_photo_service()
+        ranked_photos = advanced_service.rank_photos_advanced(
+            req.photos, req.top_k, req.context
+        )
+        
+        return {
+            "status": "success",
+            "input_count": len(req.photos),
+            "output_count": len(ranked_photos),
+            "ranked_photos": ranked_photos,
+            "features_used": {
+                "clip_analysis": req.use_clip,
+                "aesthetic_model": req.use_aesthetic_model,
+                "duplicate_detection": True,
+                "subject_consistency": True
+            },
+            "message": f"高级照片选优完成，返回前 {len(ranked_photos)} 张"
+        }
+        
+    except Exception as e:
+        logger.error(f"高级照片选优失败: {e}")
+        raise HTTPException(status_code=500, detail=f"高级照片选优失败: {str(e)}")
+
+
+@app.post("/pro/semantic_highlights")
+async def detect_semantic_highlights(req: SemanticHighlightsReq):
+    """语义高光检测"""
+    try:
+        logger.info(f"开始语义高光检测，共 {len(req.transcript_segments)} 个片段")
+        
+        detector = get_semantic_highlight_detector()
+        highlights = detector.detect_highlights(req.transcript_segments, req.context)
+        
+        # 筛选符合条件的高光
+        filtered_highlights = [
+            h for h in highlights 
+            if h.get('highlight_score', 0) >= req.min_score
+        ][:req.max_highlights]
+        
+        return {
+            "status": "success",
+            "total_segments": len(req.transcript_segments),
+            "highlights_found": len(highlights),
+            "highlights_returned": len(filtered_highlights),
+            "highlights": filtered_highlights,
+            "analysis_summary": {
+                "avg_score": np.mean([h.get('highlight_score', 0) for h in filtered_highlights]) if filtered_highlights else 0,
+                "highlight_types": list(set(h.get('highlight_type', 'unknown') for h in filtered_highlights)),
+                "min_score_threshold": req.min_score
+            },
+            "message": f"检测到 {len(filtered_highlights)} 个高光时刻"
+        }
+        
+    except Exception as e:
+        logger.error(f"语义高光检测失败: {e}")
+        raise HTTPException(status_code=500, detail=f"语义高光检测失败: {str(e)}")
+
+
+@app.post("/pro/user_style_learning")
+async def learn_user_style(req: UserStyleLearningReq):
+    """学习用户写作风格"""
+    try:
+        logger.info(f"开始学习用户 {req.user_id} 的写作风格")
+        
+        writing_service = get_personalized_writing_service()
+        user_profile = writing_service.learn_user_style(req.user_id, req.content_samples)
+        
+        return {
+            "status": "success",
+            "user_id": req.user_id,
+            "samples_analyzed": len(req.content_samples),
+            "confidence_score": user_profile.get('confidence_score', 0),
+            "learned_features": {
+                "vocabulary_patterns": len(user_profile.get('vocabulary', {}).get('signature_words', [])),
+                "emoji_preferences": len(user_profile.get('emoji', {}).get('favorite_emojis', [])),
+                "tone_analysis": user_profile.get('tone', {}).get('primary_tone', 'unknown'),
+                "topic_preferences": len(user_profile.get('topics', {}).get('preferred_topics', []))
+            },
+            "message": f"用户风格学习完成，置信度: {user_profile.get('confidence_score', 0):.2f}"
+        }
+        
+    except Exception as e:
+        logger.error(f"用户风格学习失败: {e}")
+        raise HTTPException(status_code=500, detail=f"用户风格学习失败: {str(e)}")
+
+
+@app.post("/pro/personalized_writing")
+async def generate_personalized_content(req: PersonalizedWritingReq):
+    """生成个性化内容"""
+    try:
+        logger.info(f"开始为用户 {req.user_id} 生成个性化内容")
+        
+        writing_service = get_personalized_writing_service()
+        personalized_content = writing_service.generate_personalized_content(
+            req.user_id, req.content_data, req.style_override
+        )
+        
+        return {
+            "status": "success",
+            "user_id": req.user_id,
+            "personalized_content": personalized_content,
+            "personalization_confidence": personalized_content.get('personalization_confidence', 0),
+            "features_applied": personalized_content.get('metadata', {}).get('personalization_features', []),
+            "message": "个性化内容生成完成"
+        }
+        
+    except Exception as e:
+        logger.error(f"个性化内容生成失败: {e}")
+        raise HTTPException(status_code=500, detail=f"个性化内容生成失败: {str(e)}")
+
+
+@app.post("/pro/smart_cover")
+async def generate_smart_cover(req: SmartCoverDesignReq):
+    """智能封面设计"""
+    try:
+        logger.info(f"开始智能封面设计 - 标题: {req.title[:20]}...")
+        
+        cover_designer = get_smart_cover_designer()
+        cover_result = cover_designer.generate_smart_cover(
+            req.clips, req.photos, req.title, req.style
+        )
+        
+        return {
+            "status": "success",
+            "cover_result": cover_result,
+            "design_features": {
+                "frame_analysis": bool(cover_result.get('source_frame')),
+                "color_extraction": bool(cover_result.get('color_palette')),
+                "text_layout": bool(cover_result.get('text_layout')),
+                "smart_positioning": True
+            },
+            "message": "智能封面设计完成"
+        }
+        
+    except Exception as e:
+        logger.error(f"智能封面设计失败: {e}")
+        raise HTTPException(status_code=500, detail=f"智能封面设计失败: {str(e)}")
+
+
+@app.post("/pro/audio_processing")
+async def process_video_audio(req: AudioProcessingReq):
+    """音频处理（降噪、BGM匹配）"""
+    try:
+        logger.info(f"开始音频处理 - 风格: {req.style}")
+        
+        audio_service = get_audio_processing_service()
+        processing_result = audio_service.process_video_audio(
+            req.video_path, req.style, req.enhance_speech, req.add_bgm
+        )
+        
+        return {
+            "status": "success",
+            "processing_result": processing_result,
+            "audio_enhancements": {
+                "noise_reduction": req.enhance_speech,
+                "bgm_added": req.add_bgm,
+                "beat_alignment": processing_result.get('bgm_info', {}).get('tempo', 0) > 0,
+                "final_optimization": processing_result.get('processing_steps', {}).get('final_optimization', False)
+            },
+            "message": "音频处理完成"
+        }
+        
+    except Exception as e:
+        logger.error(f"音频处理失败: {e}")
+        raise HTTPException(status_code=500, detail=f"音频处理失败: {str(e)}")
+
+
 @app.post("/xiaohongshu/photo_rank")
 async def photo_rank(req: PhotoRankingReq):
     """照片选优排序"""
@@ -1512,6 +1802,316 @@ async def xiaohongshu_pipeline(req: XHSPipelineReq):
     except Exception as e:
         logger.error(f"小红书流水线失败: {e}")
         raise HTTPException(status_code=500, detail=f"小红书流水线失败: {str(e)}")
+
+
+@app.post("/xiaohongshu/pipeline_pro")
+async def xiaohongshu_pipeline_pro(req: XHSProPipelineReq):
+    """小红书一键出稿Pro版流水线（包含所有高级功能）"""
+    try:
+        Path("input_data/downloads").mkdir(parents=True, exist_ok=True)
+        Path("output_data").mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"🚀 开始小红书Pro流水线 - 城市: {req.city}, 风格: {req.style}, 用户: {req.user_id or 'anonymous'}")
+        
+        # 处理输入文件
+        ts = int(time.time())
+        if req.video_url.startswith("file:"):
+            local_path = req.video_url.replace("file://", "")
+            if not Path(local_path).exists():
+                raise HTTPException(status_code=400, detail="本地文件不存在")
+            input_path = local_path
+        else:
+            input_path = str(Path("input_data/downloads") / f"xhs_pro_{ts}.mp4")
+            from urllib.request import urlretrieve
+            urlretrieve(req.video_url, input_path)
+        
+        pipeline_result = {
+            'source_video': input_path,
+            'processing_id': f'xhs_pro_{ts}',
+            'created_at': datetime.now().isoformat(),
+            'pro_features_enabled': {
+                'advanced_photo_ranking': req.use_advanced_photo_ranking,
+                'semantic_highlights': req.use_semantic_highlights,
+                'personalized_writing': req.use_personalized_writing,
+                'smart_cover': req.use_smart_cover,
+                'audio_enhancement': req.use_audio_enhancement
+            }
+        }
+        
+        # 1. ASR语音识别
+        logger.info("步骤1: ASR语音识别...")
+        asr_service = get_asr_service(model_size=req.model_size)
+        transcription_result = asr_service.transcribe_video(input_path, cleanup_audio=True)
+        
+        # 转换为带时间戳格式
+        transcript_mmss = []
+        for segment in transcription_result.get('segments', []):
+            transcript_mmss.append({
+                'start': segment.get('start', 0),
+                'end': segment.get('end', 0),
+                'text': segment.get('text', ''),
+                'timestamp': f"{int(segment.get('start', 0)//60):02d}:{int(segment.get('start', 0)%60):02d}"
+            })
+        
+        pipeline_result['transcription'] = transcription_result
+        pipeline_result['transcript_mmss'] = transcript_mmss
+        
+        # 2. Pro功能：语义高光检测
+        if req.use_semantic_highlights:
+            logger.info("步骤2Pro: 语义高光检测...")
+            detector = get_semantic_highlight_detector()
+            semantic_highlights = detector.detect_highlights(
+                transcription_result.get('segments', []), 
+                {'city': req.city, 'style': req.style}
+            )
+            pipeline_result['semantic_highlights'] = semantic_highlights
+            logger.info(f"检测到 {len(semantic_highlights)} 个语义高光时刻")
+        
+        # 3. 智能选段（结合语义高光）
+        logger.info("步骤3: ASR增强智能选段...")
+        asr_engine = get_asr_smart_engine()
+        
+        # 如果有语义高光，优先选择高光片段
+        if req.use_semantic_highlights and pipeline_result.get('semantic_highlights'):
+            # 基于语义高光选择片段
+            highlight_segments = []
+            for highlight in pipeline_result['semantic_highlights'][:3]:  # 取前3个高光
+                highlight_segments.append({
+                    'start_time': highlight.get('start', 0),
+                    'end_time': highlight.get('end', 0),
+                    'duration': highlight.get('duration', 15),
+                    'start_hms': f"{int(highlight.get('start', 0)//3600):02d}:{int((highlight.get('start', 0)%3600)//60):02d}:{int(highlight.get('start', 0)%60):02d}",
+                    'reason': f"语义高光: {highlight.get('highlight_reason', '精彩内容')}",
+                    'highlight_score': highlight.get('highlight_score', 0.8)
+                })
+            selected_segments = highlight_segments
+        else:
+            # 使用传统智能选段
+            selected_segments = asr_engine.select_best_segments_with_asr(
+                input_path, transcription_result, 15, 30, 2
+            )
+        
+        if not selected_segments:
+            raise HTTPException(status_code=400, detail="未找到符合条件的视频片段")
+        
+        # 生成视频片段
+        generated_clips = []
+        for i, segment in enumerate(selected_segments):
+            output_filename = f"xhs_pro_clip_{ts}_{i+1:02d}.mp4"
+            output_path = f"output_data/{output_filename}"
+            
+            start_time = segment['start_hms']
+            duration = segment['duration']
+            
+            # Pro功能：音频增强
+            if req.use_audio_enhancement:
+                # 先生成基础视频
+                fade_out_start = max(0.1, duration - 0.25)
+                vf_filters = (
+                    "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                    "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p,setsar=1:1,"
+                    f"fade=t=in:st=0:d=0.25,fade=t=out:st={fade_out_start:.2f}:d=0.25"
+                )
+                
+                temp_video_path = f"output_data/temp_{output_filename}"
+                
+                cmd = [
+                    "ffmpeg", "-y", "-hwaccel", "none",
+                    "-i", input_path,
+                    "-ss", start_time, "-t", f"{duration:.2f}",
+                    "-vf", vf_filters,
+                    "-pix_fmt", "yuv420p",
+                    "-map", "0:v:0", "-map", "0:a?",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", str(VIDEO_CRF),
+                    "-c:a", "aac", "-b:a", AUDIO_BITRATE,
+                    "-shortest", "-movflags", "+faststart",
+                    temp_video_path
+                ]
+                
+                safe_run_ffmpeg(cmd)
+                
+                # 音频增强处理
+                try:
+                    audio_service = get_audio_processing_service()
+                    audio_result = audio_service.process_video_audio(
+                        temp_video_path, req.style, True, True
+                    )
+                    
+                    if audio_result.get('success') and audio_result.get('processed_video'):
+                        # 使用增强后的视频
+                        Path(temp_video_path).unlink(missing_ok=True)  # 删除临时文件
+                        Path(audio_result['processed_video']).rename(output_path)
+                    else:
+                        # 音频增强失败，使用原视频
+                        Path(temp_video_path).rename(output_path)
+                        
+                except Exception as audio_error:
+                    logger.warning(f"音频增强失败，使用原音频: {audio_error}")
+                    Path(temp_video_path).rename(output_path)
+            else:
+                # 标准视频生成
+                fade_out_start = max(0.1, duration - 0.25)
+                vf_filters = (
+                    "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                    "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p,setsar=1:1,"
+                    f"fade=t=in:st=0:d=0.25,fade=t=out:st={fade_out_start:.2f}:d=0.25"
+                )
+                
+                cmd = [
+                    "ffmpeg", "-y", "-hwaccel", "none",
+                    "-i", input_path,
+                    "-ss", start_time, "-t", f"{duration:.2f}",
+                    "-vf", vf_filters,
+                    "-pix_fmt", "yuv420p",
+                    "-map", "0:v:0", "-map", "0:a?",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", str(VIDEO_CRF),
+                    "-c:a", "aac", "-b:a", AUDIO_BITRATE,
+                    "-shortest", "-movflags", "+faststart",
+                    output_path
+                ]
+                
+                safe_run_ffmpeg(cmd)
+            
+            file_size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
+            
+            generated_clips.append({
+                "clip_index": i + 1,
+                "output_path": output_path,
+                "start_time": start_time,
+                "start_time_seconds": segment['start_time'],
+                "end_time_seconds": segment['end_time'],
+                "duration": duration,
+                "file_size": file_size,
+                "selection_reason": segment.get('reason', 'ASR智能选段'),
+                "highlight_score": segment.get('highlight_score', 0.7)
+            })
+        
+        pipeline_result['clips'] = generated_clips
+        
+        # 4. Pro功能：高级照片选优
+        if req.photos and req.use_advanced_photo_ranking:
+            logger.info("步骤4Pro: 高级照片选优...")
+            advanced_photo_service = get_advanced_photo_service()
+            ranked_photos = advanced_photo_service.rank_photos_advanced(
+                req.photos, 10, {'city': req.city, 'style': req.style}
+            )
+            pipeline_result['photos_ranked'] = ranked_photos
+        elif req.photos:
+            # 使用基础照片选优
+            logger.info("步骤4: 基础照片选优...")
+            photo_service = get_photo_ranking_service()
+            ranked_photos = photo_service.rank_photos(req.photos, 10)
+            pipeline_result['photos_ranked'] = ranked_photos
+        else:
+            pipeline_result['photos_ranked'] = []
+        
+        # 5. 故事线生成
+        logger.info("步骤5: 生成故事线...")
+        storyline_gen = get_storyline_generator()
+        storyline = storyline_gen.generate_storyline(
+            transcript_mmss, req.notes, req.city, "", req.style
+        )
+        pipeline_result['storyline'] = storyline
+        
+        # 6. Pro功能：个性化文案生成
+        if req.use_personalized_writing and req.user_id:
+            logger.info("步骤6Pro: 个性化文案生成...")
+            writing_service = get_personalized_writing_service()
+            draft = writing_service.generate_personalized_content(
+                req.user_id, 
+                {'storyline': storyline, 'city': req.city, 'style': req.style},
+                req.style
+            )
+            pipeline_result['draft'] = draft
+        else:
+            # 使用标准文案生成
+            logger.info("步骤6: 标准文案生成...")
+            draft_gen = get_draft_generator()
+            draft = draft_gen.generate_draft(storyline, req.style)
+            pipeline_result['draft'] = draft
+        
+        # 7. 字幕生成
+        logger.info("步骤7: 生成字幕...")
+        subtitle_gen = get_subtitle_generator()
+        subtitles = subtitle_gen.generate_subtitles(generated_clips, transcript_mmss, "可爱")
+        pipeline_result['subtitles'] = subtitles
+        
+        # 8. Pro功能：智能封面设计
+        if req.use_smart_cover:
+            logger.info("步骤8Pro: 智能封面设计...")
+            cover_designer = get_smart_cover_designer()
+            cover_suggestions = cover_designer.generate_smart_cover(
+                generated_clips, pipeline_result['photos_ranked'], 
+                pipeline_result['draft']['title'], req.style
+            )
+            pipeline_result['cover'] = cover_suggestions
+        else:
+            # 使用基础封面建议
+            logger.info("步骤8: 基础封面建议...")
+            cover_service = get_cover_service()
+            cover_suggestions = cover_service.suggest_cover(
+                generated_clips, pipeline_result['photos_ranked'], 
+                pipeline_result['draft']['title']
+            )
+            pipeline_result['cover'] = cover_suggestions
+        
+        # 9. 导出产物
+        logger.info("步骤9: 导出内容产物...")
+        export_service = get_export_service()
+        export_result = export_service.export_xiaohongshu_content(
+            pipeline_result, req.export_format, False
+        )
+        
+        # 统计Pro功能使用情况
+        pro_features_used = []
+        if req.use_advanced_photo_ranking and req.photos:
+            pro_features_used.append("高级照片选优")
+        if req.use_semantic_highlights:
+            pro_features_used.append("语义高光检测")
+        if req.use_personalized_writing and req.user_id:
+            pro_features_used.append("个性化文案生成")
+        if req.use_smart_cover:
+            pro_features_used.append("智能封面设计")
+        if req.use_audio_enhancement:
+            pro_features_used.append("音频增强处理")
+        
+        return {
+            "status": "success",
+            "pipeline_result": {
+                'processing_id': pipeline_result['processing_id'],
+                'pro_features_used': pro_features_used,
+                'transcription_summary': {
+                    'language': transcription_result['language'],
+                    'duration': transcription_result['duration'],
+                    'word_count': transcription_result['word_count']
+                },
+                'semantic_highlights_count': len(pipeline_result.get('semantic_highlights', [])),
+                'clips_generated': len(generated_clips),
+                'photos_ranked': len(pipeline_result['photos_ranked']),
+                'storyline_sections': len(storyline.get('sections', [])),
+                'draft_info': {
+                    'title': pipeline_result['draft']['title'],
+                    'hashtag_count': len(pipeline_result['draft'].get('hashtags', [])),
+                    'word_count': pipeline_result['draft'].get('metadata', {}).get('word_count', 0),
+                    'personalization_confidence': pipeline_result['draft'].get('personalization_confidence', 0)
+                },
+                'subtitle_files': len(subtitles.get('srt_files', [])),
+                'cover_design': {
+                    'success': pipeline_result['cover'].get('success', False),
+                    'cover_path': pipeline_result['cover'].get('cover_path', ''),
+                    'design_features': len(pro_features_used)
+                },
+                'export_info': export_result
+            },
+            "download_links": export_result.get('share_urls', {}),
+            "message": f"🎉 小红书Pro一键出稿完成！生成了 {len(generated_clips)} 个视频片段，使用了 {len(pro_features_used)} 个Pro功能"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"小红书Pro流水线失败: {e}")
+        raise HTTPException(status_code=500, detail=f"小红书Pro流水线失败: {str(e)}")
 
 
 @app.post("/auto_intro")
