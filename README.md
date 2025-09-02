@@ -2,6 +2,15 @@
 
 一个基于AI的智能视频处理平台，集成了**ASR语音识别**、**语义分析**和**智能选段**功能，能够自动从长视频中提取最有价值的片段。
 
+## 🖥️ 可视化前端（New）
+
+- 内置前端已集成并随 API 一起提供静态资源服务。
+- 启动服务后，直接在浏览器访问：
+  - Web UI: `http://127.0.0.1:8000/static/index.html`
+  - API 文档: `http://127.0.0.1:8000/docs`
+
+说明：当前根路径 `/` 用于健康检查与基础信息返回；前端通过 `/static` 提供。如果需要将首页改为直接渲染前端，可在 `api/main.py` 中移除或调整重复声明的根路由。
+
 ## 🌟 核心特性
 
 ### 🧠 ASR增强智能选段
@@ -72,6 +81,15 @@ redis-server
 ./scripts/start_flower.sh
 ```
 
+启动后访问：
+- Web UI: `http://127.0.0.1:8000/static/index.html`
+- API 文档: `http://127.0.0.1:8000/docs`
+
+或使用 Python 启动（开发模式 自动重载）：
+```bash
+python start_server.py
+```
+
 ### Docker部署
 
 ```bash
@@ -86,6 +104,15 @@ docker-compose logs -f api
 ```
 
 ## 📖 API文档
+
+### 前端相关（New）
+- `POST /analyze_video`：视频下载/基础分析，返回本地 `video_path`
+- `POST /video/multi_segment_clipping`：多片段智能剪辑与 9:16 合成，返回输出视频与片段信息
+- `POST /upload/video`：上传本地视频到 `output_data/uploads`
+- `POST /upload/photos`：批量上传图片到 `output_data/uploads`
+- 静态资源：
+  - `/static/*` 前端静态文件（`frontend/`）
+  - `/output/*` 输出文件静态访问（`output_data/`）
 
 ### 语义分析
 ```bash
@@ -124,12 +151,24 @@ curl -X POST "http://127.0.0.1:8000/tasks/smart_clipping/enqueue" \
 curl "http://127.0.0.1:8000/tasks/status/{task_id}"
 ```
 
+### 小红书与拼图/封面相关（New）
+- `POST /xiaohongshu/generate_collage`：后端生成小红书风格拼图（返回 base64）
+- `POST /xiaohongshu/render_page`：渲染单页（单图/拼图）
+- `GET /xiaohongshu/layouts`：可用拼图布局
+- `POST /cover/generate`：智能封面生成（配合选题、主题色）
+- `GET /cover/templates`：可用封面模板
+- `POST /image/decorations/smart`：智能装饰图片
+
 ## 🏗️ 项目结构
 
 ```
 aiVideo/
 ├── api/                    # FastAPI应用
 │   └── main.py            # 主API入口
+├── frontend/               # 新增：内置前端（静态资源）
+│   ├── index.html
+│   ├── script.js
+│   └── styles.css
 ├── core/                   # 核心功能模块
 │   ├── config.py          # 配置管理
 │   ├── settings.py        # 环境设置
@@ -137,6 +176,13 @@ aiVideo/
 │   ├── semantic_analysis.py  # 语义分析引擎
 │   ├── asr_smart_clipping.py # ASR增强选段
 │   └── whisper_asr.py     # Whisper ASR服务
+│   ├── advanced_photo_ranking.py   # 新增：高级照片选优
+│   ├── image_decorator.py          # 新增：图片智能装饰
+│   ├── llm_service.py              # 新增：多LLM服务（OpenAI/Claude/Gemini/智谱/通义）
+│   ├── smart_cover_generator.py    # 新增：智能封面生成
+│   ├── advanced_collage_generator.py # 新增：高级拼图
+│   ├── xiaohongshu_collage_generator.py # 新增：小红书拼图
+│   └── xiaohongshu_publisher.py    # 新增：小红书发布集成
 ├── worker/                 # Celery异步任务
 │   ├── celery_app.py      # Celery配置
 │   └── tasks.py           # 任务定义
@@ -206,6 +252,28 @@ CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/1
 WHISPER_MODEL_SIZE=base
 WHISPER_DEVICE=auto
 ```
+
+### LLM配置（New）
+前端的文案生成、小红书内容等功能可以接入多种大模型。复制 `env_example.txt` 为 `.env` 并填写任意可用的 API Key（至少一种）：
+
+```bash
+# OpenAI
+OPENAI_API_KEY=...
+OPENAI_API_BASE=https://api.openai.com/v1
+OPENAI_MODEL=gpt-3.5-turbo
+
+# Claude
+CLAUDE_API_KEY=...
+
+# Google Gemini
+GEMINI_API_KEY=...
+
+# 智谱/通义
+ZHIPU_API_KEY=...
+QWEN_API_KEY=...
+```
+
+未配置时，后端会启用本地降级策略，仍可体验基础流程，但生成类能力会受限。
 
 ### 模型选择
 - `tiny`：最快，适合实时处理
