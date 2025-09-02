@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Video Clipper Pro - 智能视频剪辑平台</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Navigation Sidebar -->
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fas fa-video"></i>
+                    <h1>AI Video Clipper</h1>
+                </div>
+            </div>
+
+            <div class="nav-menu">
+                <a href="/" class="nav-item active" data-page="home">
+                    <i class="fas fa-home"></i>
+                    <span>首页</span>
+                </a>
+                <a href="/smart-clipping" class="nav-item" data-page="smart-clipping">
+                    <i class="fas fa-scissors"></i>
+                    <span>智能剪辑</span>
+                </a>
+                <a href="/pro-features" class="nav-item" data-page="pro-features">
+                    <i class="fas fa-star"></i>
+                    <span>Pro功能</span>
+                </a>
+                <a href="/xiaohongshu" class="nav-item" data-page="xiaohongshu">
+                    <i class="fas fa-heart"></i>
+                    <span>小红书</span>
+                </a>
+                <a href="/history" class="nav-item" data-page="history">
+                    <i class="fas fa-history"></i>
+                    <span>历史记录</span>
+                </a>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="user-info">
+                    <i class="fas fa-user-circle"></i>
+                    <span>用户中心</span>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Home Page -->
+            <div id="home" class="page active">
+                <div class="page-header">
+                    <h1><i class="fas fa-home"></i> 欢迎使用 AI Video Clipper Pro</h1>
+                    <p>智能视频处理平台，让内容创作更简单</p>
+                </div>
+
+                <div class="dashboard-grid">
+                    <div class="dashboard-card" onclick="navigateToPage('smart-clipping')">
+                        <div class="card-icon">
+                            <i class="fas fa-scissors"></i>
+                        </div>
+                        <h3>智能视频剪辑</h3>
+                        <p>从长视频中自动提取精彩片段，生成短视频内容</p>
+                        <div class="card-stats">
+                            <span><i class="fas fa-clock"></i> 平均处理时间: 2-5分钟</span>
+                        </div>
+                        <button class="card-button">
+                            开始使用 <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+
+                    <div class="dashboard-card" onclick="navigateToPage('pro-features')">
+                        <div class="card-icon pro">
+                            <i class="fas fa-star"></i>
+                        </div>
+                        <h3>Pro级AI功能</h3>
+                        <p>高级AI算法增强，包含照片选优、语义分析等专业功能</p>
+                        <div class="card-stats">
+                            <span><i class="fas fa-magic"></i> 5个专业AI模块</span>
+                        </div>
+                        <button class="card-button pro">
+                            探索Pro功能 <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+
+                    <div class="dashboard-card" onclick="navigateToPage('xiaohongshu')">
+                        <div class="card-icon xiaohongshu">
+                            <i class="fas fa-heart"></i>
+                        </div>
+                        <h3>小红书一键出稿</h3>
+                        <p>从照片上传到内容发布的完整创作流水线</p>
+                        <div class="card-stats">
+                            <span><i class="fas fa-images"></i> 支持批量处理</span>
+                        </div>
+                        <button class="card-button xiaohongshu">
+                            开始创作 <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+
+                    <div class="dashboard-card" onclick="navigateToPage('history')">
+                        <div class="card-icon">
+                            <i class="fas fa-history"></i>
+                        </div>
+                        <h3>历史记录</h3>
+                        <p>查看和管理您的所有处理记录和生成的内容</p>
+                        <div class="card-stats">
+                            <span><i class="fas fa-file-video"></i> 本地存储管理</span>
+                        </div>
+                        <button class="card-button">
+                            查看记录 <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="quick-stats">
+                    <div class="stat-item">
+                        <div class="stat-number">0</div>
+                        <div class="stat-label">今日处理</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">0</div>
+                        <div class="stat-label">总计视频</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">0MB</div>
+                        <div class="stat-label">节省存储</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Smart Clipping Page -->
+            <div id="smart-clipping" class="page">
+                <div class="page-header">
+                    <h1><i class="fas fa-scissors"></i> 智能视频剪辑</h1>
+                    <p>上传视频，AI自动分析并生成精彩片段</p>
+                </div>
+
+                <div class="workflow-container">
+                    <div class="workflow-steps">
+                        <div class="step-indicator">
+                            <div class="step active" data-step="1">
+                                <div class="step-number">1</div>
+                                <div class="step-title">上传视频</div>
+                            </div>
+                            <div class="step-line"></div>
+                            <div class="step" data-step="2">
+                                <div class="step-number">2</div>
+                                <div class="step-title">设置参数</div>
+                            </div>
+                            <div class="step-line"></div>
+                            <div class="step" data-step="3">
+                                <div class="step-number">3</div>
+                                <div class="step-title">AI处理</div>
+                            </div>
+                            <div class="step-line"></div>
+                            <div class="step" data-step="4">
+                                <div class="step-number">4</div>
+                                <div class="step-title">获取结果</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="workflow-content">
+                        <!-- Step 1: Upload Video -->
+                        <div class="workflow-step-content active" data-step="1">
+                            <div class="step-card">
+                                <h3>选择视频来源</h3>
+                                <div class="input-methods">
+                                    <div class="input-method active" data-method="url">
+                                        <i class="fab fa-youtube"></i>
+                                        <span>YouTube链接</span>
+                                    </div>
+                                    <div class="input-method" data-method="upload">
+                                        <i class="fas fa-upload"></i>
+                                        <span>本地上传</span>
+                                    </div>
+                                </div>
+
+                                <div id="url-input-section" class="input-section">
+                                    <label>YouTube视频链接</label>
+                                    <div class="url-input-group">
+                                        <input type="url" id="video-url" placeholder="粘贴YouTube视频链接...">
+                                        <button id="analyze-url" class="btn-secondary">
+                                            <i class="fas fa-search"></i>
+                                            分析
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div id="upload-input-section" class="input-section hidden">
+                                    <label>上传视频文件</label>
+                                    <div class="upload-area" id="upload-area">
+                                        <i class="fas fa-cloud-upload-alt"></i>
+                                        <p>拖拽视频文件到此处或点击选择</p>
+                                        <p class="upload-hint">支持 MP4, MOV, AVI 格式，最大 500MB</p>
+                                        <input type="file" id="video-upload" accept="video/*" hidden>
+                                    </div>
+                                </div>
+
+                                <div class="step-actions">
+                                    <button id="next-to-step2" class="btn-primary" disabled>
+                                        下一步：设置参数 <i class="fas fa-arrow-right"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Step 2: Configure Parameters -->
+                        <div class="workflow-step-content" data-step="2">
+                            <div class="step-card">
+                                <h3>配置剪辑参数</h3>
+                                <div class="params-grid">
+                                    <div class="param-group">
+                                        <label>视频主题</label>
+                                        <input type="text" id="topic" placeholder="例如：技术教程、产品介绍...">
+                                        <small>帮助AI更好地理解视频内容</small>
+                                    </div>
+
+                                    <div class="param-group">
+                                        <label>片段数量</label>
+                                        <select id="target-segments">
+                                            <option value="2">2个片段</option>
+                                            <option value="3" selected>3个片段</option>
+                                            <option value="4">4个片段</option>
+                                            <option value="5">5个片段</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="param-group">
+                                        <label>总时长 (秒)</label>
+                                        <input type="range" id="total-duration" min="30" max="180" value="60" step="10">
+                                        <div class="range-value"><span id="duration-value">60</span> 秒</div>
+                                    </div>
+
+                                    <div class="param-group">
+                                        <label>高级选项</label>
+                                        <div class="checkbox-group">
+                                            <label class="checkbox">
+                                                <input type="checkbox" id="enable-content-analysis" checked>
+                                                <span class="checkmark"></span>
+                                                启用内容分析
+                                            </label>
+                                            <label class="checkbox">
+                                                <input type="checkbox" id="enable-intro">
+                                                <span class="checkmark"></span>
+                                                包含开头片段
+                                            </label>
+                                            <label class="checkbox">
+                                                <input type="checkbox" id="enable-conclusion">
+                                                <span class="checkmark"></span>
+                                                包含结尾片段
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="step-actions">
+                                    <button id="back-to-step1" class="btn-secondary">
+                                        <i class="fas fa-arrow-left"></i> 上一步
+                                    </button>
+                                    <button id="start-processing" class="btn-primary">
+                                        开始处理 <i class="fas fa-play"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Step 3: Processing -->
+                        <div class="workflow-step-content" data-step="3">
+                            <div class="step-card processing">
+                                <h3>AI正在处理您的视频</h3>
+                                <div class="processing-animation">
+                                    <div class="processing-circle">
+                                        <i class="fas fa-magic"></i>
+                                    </div>
+                                </div>
+                                <div class="processing-status">
+                                    <div class="status-text" id="processing-status">准备中...</div>
+                                    <div class="progress-bar">
+                                        <div class="progress-fill" id="processing-progress"></div>
+                                    </div>
+                                    <div class="progress-percentage" id="progress-percentage">0%</div>
+                                </div>
+                                <div class="processing-steps">
+                                    <div class="processing-step" data-step="download">
+                                        <i class="fas fa-download"></i>
+                                        <span>下载视频</span>
+                                    </div>
+                                    <div class="processing-step" data-step="analyze">
+                                        <i class="fas fa-search"></i>
+                                        <span>内容分析</span>
+                                    </div>
+                                    <div class="processing-step" data-step="select">
+                                        <i class="fas fa-scissors"></i>
+                                        <span>片段选择</span>
+                                    </div>
+                                    <div class="processing-step" data-step="generate">
+                                        <i class="fas fa-video"></i>
+                                        <span>生成视频</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Step 4: Results -->
+                        <div class="workflow-step-content" data-step="4">
+                            <div class="step-card results">
+                                <h3><i class="fas fa-check-circle"></i> 处理完成</h3>
+                                <div class="results-container">
+                                    <div class="video-result">
+                                        <video id="result-video" controls></video>
+                                        <div class="video-actions">
+                                            <button id="download-video" class="btn-success">
+                                                <i class="fas fa-download"></i> 下载视频
+                                            </button>
+                                            <button id="share-video" class="btn-secondary">
+                                                <i class="fas fa-share"></i> 分享
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="results-info">
+                                        <div class="info-section">
+                                            <h4>视频信息</h4>
+                                            <div class="info-item">
+                                                <span>时长:</span>
+                                                <span id="result-duration">--:--</span>
+                                            </div>
+                                            <div class="info-item">
+                                                <span>大小:</span>
+                                                <span id="result-size">-- MB</span>
+                                            </div>
+                                            <div class="info-item">
+                                                <span>分辨率:</span>
+                                                <span id="result-resolution">1080x1920</span>
+                                            </div>
+                                        </div>
+                                        <div class="info-section">
+                                            <h4>选中片段</h4>
+                                            <div id="segments-info"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="step-actions">
+                                    <button id="process-new-video" class="btn-primary">
+                                        处理新视频 <i class="fas fa-plus"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pro Features Page -->
+            <div id="pro-features" class="page">
+                <div class="page-header">
+                    <h1><i class="fas fa-star"></i> Pro级AI功能</h1>
+                    <p>专业级AI算法，提升您的内容创作质量</p>
+                </div>
+
+                <div class="pro-features-container">
+                    <!-- Advanced Photo Ranking -->
+                    <div class="pro-feature-section">
+                        <div class="feature-header">
+                            <div class="feature-icon">
+                                <i class="fas fa-images"></i>
+                            </div>
+                            <div class="feature-title">
+                                <h3>高级照片选优</h3>
+                                <p>使用CLIP和美学模型进行智能照片排序和筛选</p>
+                            </div>
+                            <div class="feature-status">
+                                <span class="status-badge active">已启用</span>
+                            </div>
+                        </div>
+                        
+                        <div class="feature-content">
+                            <div class="feature-demo">
+                                <div class="upload-photos-area" id="photo-upload-area">
+                                    <i class="fas fa-images"></i>
+                                    <p>拖拽多张照片到此处进行智能排序</p>
+                                    <p class="upload-hint">支持 JPG, PNG 格式，最多20张</p>
+                                    <input type="file" id="photo-upload" accept="image/*" multiple hidden>
+                                    <button class="btn-secondary" onclick="document.getElementById('photo-upload').click()">
+                                        选择照片
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="feature-settings">
+                                <h4>配置选项</h4>
+                                <div class="settings-grid">
+                                    <div class="setting-item">
+                                        <label>排序标准</label>
+                                        <select id="ranking-criteria">
+                                            <option value="aesthetic">美学质量</option>
+                                            <option value="clip">语义相关性</option>
+                                            <option value="combined" selected>综合评分</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <button id="process-photos" class="btn-primary">
+                                    <i class="fas fa-magic"></i> 开始智能排序
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Personalized Writing -->
+                    <div class="pro-feature-section">
+                        <div class="feature-header">
+                            <div class="feature-icon">
+                                <i class="fas fa-pen-fancy"></i>
+                            </div>
+                            <div class="feature-title">
+                                <h3>个性化文案生成</h3>
+                                <p>学习用户写作风格，生成个性化内容</p>
+                            </div>
+                            <div class="feature-status">
+                                <span class="status-badge active">已启用</span>
+                            </div>
+                        </div>
+                        
+                        <div class="feature-content">
+                            <div class="feature-demo">
+                                <div class="content-generation">
+                                    <h4>生成内容</h4>
+                                    <div class="generation-inputs">
+                                        <input type="text" id="content-topic" placeholder="内容主题或关键词">
+                                        <select id="content-type">
+                                            <option value="title">标题</option>
+                                            <option value="description">描述</option>
+                                            <option value="hashtags">话题标签</option>
+                                            <option value="complete">完整文案</option>
+                                        </select>
+                                        <button id="generate-content" class="btn-primary">
+                                            <i class="fas fa-magic"></i> 生成文案
+                                        </button>
+                                    </div>
+                                    <div class="generated-content" id="generated-content" style="display: none;">
+                                        <h5>生成结果</h5>
+                                        <div class="content-result" id="content-result"></div>
+                                        <button class="btn-secondary" onclick="copyToClipboard('content-result')">
+                                            <i class="fas fa-copy"></i> 复制
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Xiaohongshu Page -->
+            <div id="xiaohongshu" class="page">
+                <div class="page-header">
+                    <h1><i class="fas fa-heart"></i> 小红书一键出稿</h1>
+                    <p>从照片到发布的完整内容创作流水线</p>
+                </div>
+
+                <div class="xiaohongshu-container">
+                    <div class="workflow-progress">
+                        <div class="progress-step active" data-step="1">
+                            <div class="step-circle">1</div>
+                            <span>上传照片</span>
+                        </div>
+                        <div class="progress-line"></div>
+                        <div class="progress-step" data-step="2">
+                            <div class="step-circle">2</div>
+                            <span>设置主题</span>
+                        </div>
+                        <div class="progress-line"></div>
+                        <div class="progress-step" data-step="3">
+                            <div class="step-circle">3</div>
+                            <span>AI生成</span>
+                        </div>
+                        <div class="progress-line"></div>
+                        <div class="progress-step" data-step="4">
+                            <div class="step-circle">4</div>
+                            <span>预览发布</span>
+                        </div>
+                    </div>
+
+                    <!-- Step 1: Upload Photos -->
+                    <div class="xiaohongshu-step active" data-step="1">
+                        <div class="step-card">
+                            <h3><i class="fas fa-images"></i> 上传照片素材</h3>
+                            <div class="photo-upload-zone" id="xhs-photo-upload">
+                                <div class="upload-area large" id="xhs-upload-area">
+                                    <i class="fas fa-cloud-upload-alt"></i>
+                                    <p>拖拽照片到此处或点击选择</p>
+                                    <p class="upload-hint">支持批量上传，最多20张照片</p>
+                                    <input type="file" id="xhs-photos" accept="image/*" multiple hidden>
+                                    <button class="btn-primary" onclick="document.getElementById('xhs-photos').click()">
+                                        <i class="fas fa-plus"></i> 选择照片
+                                    </button>
+                                </div>
+                                <div class="photo-preview-grid" id="xhs-photo-preview" style="display: none;">
+                                    <h4>已选择的照片</h4>
+                                    <div class="photo-grid" id="xhs-photo-grid"></div>
+                                    <div class="photo-actions">
+                                        <button class="btn-secondary" onclick="document.getElementById('xhs-photos').click()">
+                                            <i class="fas fa-plus"></i> 添加更多
+                                        </button>
+                                        <button class="btn-secondary" onclick="clearXHSPhotos()">
+                                            <i class="fas fa-trash"></i> 清空照片
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="step-actions">
+                                <button id="xhs-next-step2" class="btn-primary" disabled>
+                                    下一步：设置主题 <i class="fas fa-arrow-right"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 2: Set Theme -->
+                    <div class="xiaohongshu-step" data-step="2">
+                        <div class="step-card">
+                            <h3><i class="fas fa-edit"></i> 设置内容主题</h3>
+                            <div class="theme-settings">
+                                <div class="input-group">
+                                    <label>内容主题</label>
+                                    <input type="text" id="xhs-theme" placeholder="例如：阿那亚亲子游、美食探店、穿搭分享...">
+                                </div>
+                                <div class="input-group">
+                                    <label>内容类型</label>
+                                    <select id="xhs-content-type">
+                                        <option value="travel">旅行分享</option>
+                                        <option value="food">美食探店</option>
+                                        <option value="lifestyle">生活方式</option>
+                                        <option value="fashion">穿搭时尚</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="step-actions">
+                                <button id="xhs-back-step1" class="btn-secondary">
+                                    <i class="fas fa-arrow-left"></i> 上一步
+                                </button>
+                                <button id="xhs-generate" class="btn-primary">
+                                    <i class="fas fa-magic"></i> 生成内容
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 3: Results -->
+                    <div class="xiaohongshu-step" data-step="3">
+                        <div class="step-card">
+                            <h3><i class="fas fa-eye"></i> 生成结果</h3>
+                            <div class="results-container">
+                                <div class="result-left">
+                                    <div class="result-section">
+                                        <h4><i class="fas fa-magic"></i> 智能封面</h4>
+                                        <div class="cover-preview" id="xhs-cover-preview">
+                                            <div class="cover-container" id="xhs-cover-container">
+                                                <!-- 智能封面将在这里生成 -->
+                                            </div>
+                                            <div class="cover-controls">
+                                                <div class="control-group">
+                                                    <label>布局模板:</label>
+                                                    <select id="cover-layout">
+                                                        <option value="grid_3x3">3x3网格</option>
+                                                        <option value="grid_2x2">2x2网格</option>
+                                                        <option value="collage_mixed">混合拼贴</option>
+                                                        <option value="magazine">杂志风格</option>
+                                                        <option value="polaroid">宝丽来风格</option>
+                                                        <option value="treemap">Treemap 树地图</option>
+                                                    </select>
+                                                </div>
+                                                <div class="control-group">
+                                                    <label>颜色主题:</label>
+                                                    <select id="cover-theme">
+                                                        <option value="pink_gradient">粉色渐变</option>
+                                                        <option value="blue_gradient">蓝色渐变</option>
+                                                        <option value="warm_sunset">暖色夕阳</option>
+                                                        <option value="cool_mint">清凉薄荷</option>
+                                                        <option value="elegant_gray">优雅灰调</option>
+                                                    </select>
+                                                </div>
+                                                <div class="control-group">
+                                                    <label>封面文案（写在封面上）</label>
+                                                    <textarea id="cover-overlay-text" placeholder="可输入1-3句文案，将叠加到封面" rows="3"></textarea>
+                                                </div>
+                                            </div>
+                                            <div class="cover-actions">
+                                                <button class="btn-primary" onclick="generateSmartCover()">
+                                                    <i class="fas fa-magic"></i> 生成封面
+                                                </button>
+                                                <button class="btn-secondary" onclick="decorateImages()">
+                                                    <i class="fas fa-paint-brush"></i> 装饰图片
+                                                </button>
+                                                <button class="btn-success" onclick="downloadCover()">
+                                                    <i class="fas fa-download"></i> 下载封面
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="result-right">
+                                    <div class="result-section">
+                                        <h4><i class="fas fa-file-image"></i> 页面设计</h4>
+                                        <div class="cover-preview" id="xhs-page-preview">
+                                            <div class="cover-container" id="xhs-page-container"></div>
+                                            <div class="cover-controls">
+                                                <div class="control-group">
+                                                    <label>页面类型:</label>
+                                                    <select id="xhs-page-mode">
+                                                        <option value="single">单图展示</option>
+                                                        <option value="collage">拼图</option>
+                                                    </select>
+                                                </div>
+                                                <div class="control-group">
+                                                    <label>拼图布局:</label>
+                                                    <select id="xhs-page-layout">
+                                                        <option value="scrapbook">手帐拼贴</option>
+                                                        <option value="magazine_style">杂志风格</option>
+                                                        <option value="grid_modern">现代网格</option>
+                                                    </select>
+                                                </div>
+                                                <div class="control-group">
+                                                    <label>页面文案:</label>
+                                                    <textarea id="xhs-page-text" rows="3" placeholder="本页展示文案，将写在图上"></textarea>
+                                                </div>
+                                            </div>
+                                            <div class="cover-actions">
+                                                <button class="btn-primary" id="xhs-render-page">
+                                                    <i class="fas fa-palette"></i> 渲染本页
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="result-section">
+                                        <h4><i class="fas fa-images"></i> 小红书拼图</h4>
+                                        <div class="cover-preview" id="xhs-collage-preview">
+                                            <div class="cover-container" id="xhs-collage-container"></div>
+                                            <div class="cover-controls">
+                                                <div class="control-group">
+                                                    <label>拼图布局:</label>
+                                                    <select id="xhs-collage-layout">
+                                                        <option value="scrapbook">手帐拼贴（推荐）</option>
+                                                        <option value="magazine_style">杂志风格</option>
+                                                        <option value="grid_modern">现代网格</option>
+                                                        <option value="artistic_collage">艺术拼贴</option>
+                                                        <option value="minimal_clean">简约清新</option>
+                                                    </select>
+                                                </div>
+                                                <div class="control-group">
+                                                    <label>标题位置:</label>
+                                                    <select id="xhs-title-position">
+                                                        <option value="center_overlay">居中覆盖</option>
+                                                        <option value="top">顶部居中</option>
+                                                    </select>
+                                                </div>
+                                                <div class="control-group">
+                                                    <label>副标题:</label>
+                                                    <input type="text" id="xhs-subtitle" placeholder="可选：一句话副标题" />
+                                                </div>
+                                            </div>
+                                            <div class="cover-actions">
+                                                <button class="btn-primary" id="xhs-generate-collage">
+                                                    <i class="fas fa-layer-group"></i> 生成小红书拼图
+                                                </button>
+                                                <button class="btn-secondary" id="xhs-reroll-collage">
+                                                    <i class="fas fa-random"></i> 换一种贴法
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="result-section">
+                                        <h4><i class="fas fa-pen"></i> 智能文案生成</h4>
+                                        
+                                        <!-- 个性化选项 -->
+                                        <div class="content-customization">
+                                            <div class="custom-row">
+                                                <div class="custom-input">
+                                                    <label>想要强调的点:</label>
+                                                    <input type="text" id="content-highlights" placeholder="如：风景美、性价比高、服务好等">
+                                                </div>
+                                                <div class="custom-input">
+                                                    <label>个人感受:</label>
+                                                    <input type="text" id="content-feeling" placeholder="如：超级满意、值得推荐、还会再来等">
+                                                </div>
+                                            </div>
+                                            <div class="custom-row">
+                                                <div class="custom-input">
+                                                    <label>文案风格:</label>
+                                                    <select id="content-style">
+                                                        <option value="活泼">活泼可爱</option>
+                                                        <option value="专业">专业详细</option>
+                                                        <option value="简约">简约清新</option>
+                                                        <option value="情感">情感丰富</option>
+                                                    </select>
+                                                </div>
+                                                <div class="custom-input">
+                                                    <label>字数长度:</label>
+                                                    <select id="content-length">
+                                                        <option value="short">简短版 (100字)</option>
+                                                        <option value="medium" selected>标准版 (200字)</option>
+                                                        <option value="long">详细版 (300字+)</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- 可编辑文案区域 -->
+                                        <div class="editable-content-area">
+                                            <textarea 
+                                                id="xhs-result-content" 
+                                                class="editable-textarea"
+                                                placeholder="生成的文案将在这里显示，您可以直接编辑修改..."
+                                                rows="12"
+                                            ></textarea>
+                                            <div class="content-stats">
+                                                <span id="content-word-count">字数: 0</span>
+                                                <span id="content-line-count">行数: 0</span>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="content-actions">
+                                            <button class="btn-primary" onclick="generateSmartContent()">
+                                                <i class="fas fa-magic"></i> 智能生成
+                                            </button>
+                                            <button class="btn-secondary" onclick="regenerateContent()">
+                                                <i class="fas fa-refresh"></i> 重新生成
+                                            </button>
+                                            <button class="btn-secondary" onclick="copyToClipboard('xhs-result-content')">
+                                                <i class="fas fa-copy"></i> 复制文案
+                                            </button>
+                                            <button class="btn-secondary" onclick="saveContentTemplate()">
+                                                <i class="fas fa-save"></i> 保存模板
+                                            </button>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="result-section">
+                                        <h4><i class="fas fa-hashtag"></i> 推荐标签</h4>
+                                        <div class="hashtags-container" id="xhs-hashtags-container">
+                                            <!-- 标签将在这里显示 -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="step-actions">
+                                <button id="xhs-new-project" class="btn-primary">
+                                    <i class="fas fa-plus"></i> 创建新项目
+                                </button>
+                                <button class="btn-success" onclick="publishToXiaohongshu()">
+                                    <i class="fas fa-share"></i> 一键发布到小红书
+                                </button>
+                                <button class="btn-secondary" onclick="previewBeforePublish()">
+                                    <i class="fas fa-eye"></i> 预览发布效果
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- History Page -->
+            <div id="history" class="page">
+                <div class="page-header">
+                    <h1><i class="fas fa-history"></i> 历史记录</h1>
+                    <p>管理您的所有处理记录和生成内容</p>
+                </div>
+                <div class="history-container">
+                    <!-- Filter and Search -->
+                    <div class="history-filters">
+                        <div class="filter-group">
+                            <label>类型筛选:</label>
+                            <select id="history-filter-type">
+                                <option value="all">全部</option>
+                                <option value="video">视频处理</option>
+                                <option value="xiaohongshu">小红书内容</option>
+                                <option value="pro">Pro功能</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>时间范围:</label>
+                            <select id="history-filter-time">
+                                <option value="all">全部时间</option>
+                                <option value="today">今天</option>
+                                <option value="week">最近一周</option>
+                                <option value="month">最近一月</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <input type="text" id="history-search" placeholder="搜索历史记录...">
+                            <button class="btn-secondary" onclick="searchHistory()">
+                                <i class="fas fa-search"></i>
+                            </button>
+                        </div>
+                        <div class="filter-actions">
+                            <button class="btn-secondary" onclick="refreshHistory()">
+                                <i class="fas fa-refresh"></i> 刷新
+                            </button>
+                            <button class="btn-danger" onclick="clearAllHistory()">
+                                <i class="fas fa-trash"></i> 清空历史
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- History List -->
+                    <div class="history-list" id="history-list">
+                        <div class="history-loading" id="history-loading">
+                            <i class="fas fa-spinner fa-spin"></i>
+                            <p>正在加载历史记录...</p>
+                        </div>
+                    </div>
+
+                    <!-- Pagination -->
+                    <div class="history-pagination" id="history-pagination" style="display: none;">
+                        <button class="btn-secondary" id="prev-page" onclick="changePage(-1)">
+                            <i class="fas fa-chevron-left"></i> 上一页
+                        </button>
+                        <span class="page-info" id="page-info">第 1 页，共 1 页</span>
+                        <button class="btn-secondary" id="next-page" onclick="changePage(1)">
+                            下一页 <i class="fas fa-chevron-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="/static/script.js"></script>
+    <script src="/static/llm-integration.js"></script>
+</body>
+</html>

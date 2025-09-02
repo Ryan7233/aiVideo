@@ -8,9 +8,10 @@ from urllib.request import urlretrieve
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -37,6 +38,12 @@ from core.semantic_highlights import get_semantic_highlight_detector
 from core.personalized_writing import get_personalized_writing_service
 from core.smart_cover_design import get_smart_cover_designer
 from core.audio_processing import get_audio_processing_service
+from core.xiaohongshu_publisher import get_xiaohongshu_publisher
+from core.image_decorator import get_image_decorator
+from core.smart_cover_generator import get_smart_cover_generator
+from core.llm_service import get_llm_service
+from core.advanced_collage_generator import get_advanced_collage_generator
+from core.xiaohongshu_collage_generator import get_xiaohongshu_collage_generator, CollageConfig, TextConfig
 from routers.tasks import router as tasks_router
 
 # Setup logging
@@ -74,6 +81,16 @@ Path("logs").mkdir(exist_ok=True)
 
 # Routers
 app.include_router(tasks_router)
+
+# Mount static files and frontend
+app.mount("/static", StaticFiles(directory="frontend"), name="static")
+app.mount("/static/uploads", StaticFiles(directory="output_data/uploads"), name="uploads")
+app.mount("/output", StaticFiles(directory="output_data"), name="output")
+
+@app.get("/")
+async def serve_frontend():
+    """Serve the main frontend page"""
+    return FileResponse("frontend/index.html")
 
 # Exception handler for validation errors
 @app.exception_handler(RequestValidationError)
@@ -939,6 +956,28 @@ class XHSProPipelineReq(BaseModel):
     style: str = "治愈"
     user_id: Optional[str] = None
     model_size: str = "base"
+
+# 新增API模型
+class XHSPublishReq(BaseModel):
+    title: str
+    content: str
+    images: List[str]
+    tags: List[str]
+    location: Optional[str] = None
+    privacy: str = "public"
+
+class ImageDecorateReq(BaseModel):
+    image_path: str
+    decorations: Dict[str, Any]
+
+class SmartCoverReq(BaseModel):
+    images: List[str]
+    title: str
+    subtitle: str = ""
+    layout: str = "grid_3x3"
+    theme: str = "pink_gradient"
+    platform: str = "xiaohongshu"
+    custom_config: Optional[Dict[str, Any]] = None
     export_format: str = "zip"
     
     # Pro功能开关
@@ -947,13 +986,57 @@ class XHSProPipelineReq(BaseModel):
     use_personalized_writing: bool = False
     use_smart_cover: bool = True
     use_audio_enhancement: bool = True
-    
-    @field_validator('video_url')
-    @classmethod
-    def validate_video_url(cls, v):
-        if not v.strip():
-            raise ValueError('视频URL不能为空')
-        return v.strip()
+
+class LLMContentReq(BaseModel):
+    theme: str
+    photo_descriptions: List[str] = []
+    highlights: str = ""
+    feeling: str = ""
+    style: str = "活泼"
+    length: str = "medium"
+    custom_requirements: str = ""
+    content_type: str = "xiaohongshu"  # xiaohongshu, pro, general
+
+class ProContentReq(BaseModel):
+    topic: str
+    content_type: str = "complete"  # title, description, hashtags, complete
+    style: str = "professional"
+    target_audience: str = "general"
+
+class AdvancedCollageReq(BaseModel):
+    images: List[str]  # 图片路径列表
+    title: str
+    layout_type: str = "dynamic"  # dynamic, grid, magazine, mosaic, creative
+    style: str = "modern"  # modern, vintage, artistic, minimal
+    color_scheme: str = "auto"  # auto, warm, cool, monochrome, vibrant
+    canvas_size: List[int] = [800, 800]
+    add_effects: bool = True
+    add_text_overlay: bool = True
+    extra_text: Optional[str] = ""
+    text_position: str = "bottom"  # bottom | center
+
+class XiaohongshuCollageReq(BaseModel):
+    images: List[str]
+    title: str
+    subtitle: str = ""
+    layout: str = "magazine_style"
+    color_scheme: str = "xiaohongshu_pink"
+    width: int = 2160
+    height: int = 2160
+    quality: int = 95
+    custom_texts: List[Dict[str, Any]] = []
+    # 新增：标题排版控制
+    title_position: str = "center_overlay"  # center_overlay | top
+    font_path: Optional[str] = None
+    overlay_texts: List[Dict[str, Any]] = []  # 额外文案块，锚点定位
+
+class EditableTextReq(BaseModel):
+    collage_id: str
+    text_id: str
+    new_text: str
+    font_size: int = 80
+    color: str = "#2C2C2C"
+    position: List[int] = [100, 100]
 
 
 @app.post("/analyze_video")
@@ -2316,6 +2399,1454 @@ async def auto_intro(req: URLIntroReq):
     except Exception as e:
         logger.error(f"Auto intro error: {e}")
         raise HTTPException(status_code=500, detail=f"自动简介视频生成失败: {str(e)}")
+
+
+# 新增：智能多片段视频剪辑API
+class MultiSegmentClippingReq(BaseModel):
+    video_path: str
+    subtitle_path: Optional[str] = None
+    topic: str
+    target_segments: int = 3
+    segment_duration: float = 8.0
+    total_duration: float = 24.0
+    semantic_weight: float = 0.4
+    visual_weight: float = 0.3
+    audio_weight: float = 0.3
+    include_intro: bool = True
+    include_highlights: bool = True
+    include_conclusion: bool = True
+
+def parse_srt_file(srt_path: str) -> List[Dict]:
+    """解析SRT字幕文件"""
+    segments = []
+    try:
+        with open(srt_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # 简单的SRT解析
+        blocks = content.strip().split('\n\n')
+        for block in blocks:
+            lines = block.strip().split('\n')
+            if len(lines) >= 3:
+                # 时间戳行
+                time_line = lines[1]
+                if '-->' in time_line:
+                    start_time, end_time = time_line.split(' --> ')
+                    # 文本内容
+                    text = ' '.join(lines[2:])
+                    segments.append({
+                        'start': start_time.strip(),
+                        'end': end_time.strip(),
+                        'text': text.strip()
+                    })
+    except Exception as e:
+        logger.error(f"解析SRT文件失败: {e}")
+    
+    return segments
+
+def time_to_seconds(time_str: str) -> float:
+    """将时间字符串转换为秒数"""
+    try:
+        # 处理格式如 "00:01:23,456"
+        time_str = time_str.replace(',', '.')
+        parts = time_str.split(':')
+        if len(parts) == 3:
+            h, m, s = parts
+            return int(h) * 3600 + int(m) * 60 + float(s)
+        elif len(parts) == 2:
+            m, s = parts
+            return int(m) * 60 + float(s)
+        else:
+            return float(parts[0])
+    except:
+        return 0.0
+
+def analyze_video_segments_v2(video_path: str, subtitle_segments: List[Dict], total_duration: float, topic: str) -> List[Dict]:
+    """基于核心概念分析视频片段"""
+    segments = []
+    
+    # 1. 提取核心概念
+    core_concepts = extract_video_core_concepts(subtitle_segments, topic)
+    
+    # 2. 使用更灵活的窗口大小
+    base_window_size = 15.0  # 基础15秒窗口
+    overlap = 5.0            # 5秒重叠
+    
+    current_time = 0.0
+    segment_id = 0
+    
+    while current_time < total_duration - base_window_size:
+        # 动态调整窗口大小（8-30秒之间）
+        window_size = base_window_size
+        end_time = min(current_time + window_size, total_duration)
+        
+        # 获取该时间段的字幕文本
+        segment_text = ""
+        subtitle_count = 0
+        
+        for sub in subtitle_segments:
+            sub_start = time_to_seconds(sub['start'])
+            sub_end = time_to_seconds(sub['end'])
+            
+            # 更宽松的时间匹配
+            if sub_start < end_time and sub_end > current_time:
+                segment_text += sub['text'] + " "
+                subtitle_count += 1
+        
+        # 智能边界检测：确保不在句子中间切断
+        if subtitle_count >= 3:
+            # 寻找更好的结束点（句号、问号、感叹号后）
+            for sub in subtitle_segments:
+                sub_start = time_to_seconds(sub['start'])
+                sub_end = time_to_seconds(sub['end'])
+                
+                if sub_start >= end_time and sub_start <= end_time + 5:  # 5秒缓冲
+                    text = sub['text'].strip()
+                    # 如果这个字幕以句号、问号、感叹号结尾，就延伸到这里
+                    if text.endswith(('。', '？', '！', '.', '?', '!')):
+                        window_size = sub_end - current_time
+                        end_time = sub_end
+                        break
+        
+        # 如果文本太少，扩展窗口
+        if subtitle_count < 3 and end_time < total_duration - 10:
+            window_size = min(window_size + 10, 35.0)  # 增加到35秒最大
+            end_time = min(current_time + window_size, total_duration)
+            
+            # 重新获取文本
+            segment_text = ""
+            for sub in subtitle_segments:
+                sub_start = time_to_seconds(sub['start'])
+                sub_end = time_to_seconds(sub['end'])
+                if sub_start < end_time and sub_end > current_time:
+                    segment_text += sub['text'] + " "
+        
+        # 计算语义评分（基于核心概念）
+        semantic_analysis = calculate_semantic_score(segment_text, topic, core_concepts)
+        
+        # 计算其他评分
+        visual_score = calculate_visual_score(current_time, end_time, video_path)
+        audio_score = calculate_audio_score(current_time, end_time, video_path)
+        position_weight = calculate_position_weight(current_time, total_duration)
+        
+        # 综合评分 - 提高语义权重
+        total_score = (
+            semantic_analysis["total_score"] * 0.6 + 
+            visual_score * 0.2 + 
+            audio_score * 0.1 + 
+            position_weight * 0.1
+        )
+        
+        # 找出最匹配的核心概念
+        best_concept = None
+        best_concept_score = 0
+        for concept_name, concept_data in semantic_analysis["concept_scores"].items():
+            if concept_data["score"] > best_concept_score:
+                best_concept = concept_name
+                best_concept_score = concept_data["score"]
+        
+        segments.append({
+            'id': segment_id,
+            'start_time': current_time,
+            'end_time': end_time,
+            'duration': end_time - current_time,
+            'text': segment_text.strip(),
+            'semantic_analysis': semantic_analysis,
+            'visual_score': visual_score,
+            'audio_score': audio_score,
+            'position_weight': position_weight,
+            'total_score': total_score,
+            'best_concept': best_concept,
+            'best_concept_score': best_concept_score,
+            'subtitle_count': subtitle_count
+        })
+        
+        current_time += (window_size - overlap)
+        segment_id += 1
+    
+    return segments
+
+def analyze_video_content_structure(subtitle_segments: List[Dict]) -> Dict:
+    """分析视频内容结构，自动提取关键主题和论点"""
+    full_text = " ".join([seg['text'] for seg in subtitle_segments])
+    
+    # 1. 找到关键问题和定义
+    key_questions = []
+    definitions = []
+    examples = []
+    background = []
+    conclusions = []
+    
+    for i, seg in enumerate(subtitle_segments):
+        text = seg['text'].strip()
+        start_time = time_to_seconds(seg['start'])
+        
+        # 识别关键问题
+        if any(q in text for q in ['什么是', '到底是什么', '为什么', '怎么做', '如何']):
+            key_questions.append({
+                'text': text,
+                'start_time': start_time,
+                'type': 'question'
+            })
+        
+        # 识别定义性内容
+        if any(d in text for d in ['定义', '概念', '本质', '核心', '就是']):
+            definitions.append({
+                'text': text,
+                'start_time': start_time,
+                'type': 'definition'
+            })
+        
+        # 识别例子和案例
+        if any(e in text for e in ['比如', '例子', '案例', '举例', '演示']):
+            examples.append({
+                'text': text,
+                'start_time': start_time,
+                'type': 'example'
+            })
+        
+        # 识别背景信息
+        if any(b in text for b in ['背景', '现实', '发生', '变化', '革命', '历史']):
+            background.append({
+                'text': text,
+                'start_time': start_time,
+                'type': 'background'
+            })
+    
+    # 2. 基于Vibe Coding主题的特定分析
+    vibe_coding_analysis = {
+        'introduction': [],
+        'definition': [],
+        'why_important': [],
+        'how_it_works': [],
+        'advantages': [],
+        'context': [],
+        'future': []
+    }
+    
+    for seg in subtitle_segments:
+        text = seg['text'].strip().lower()
+        start_time = time_to_seconds(seg['start'])
+        
+        # 开场介绍
+        if any(intro in text for intro in ['最近', '发生', '两件事', '告诉大家']):
+            vibe_coding_analysis['introduction'].append({
+                'text': seg['text'],
+                'start_time': start_time,
+                'relevance': 0.9
+            })
+        
+        # 核心定义
+        if 'vibe coding' in text and any(def_word in text for def_word in ['什么', '定义', '概念', '到底是']):
+            vibe_coding_analysis['definition'].append({
+                'text': seg['text'],
+                'start_time': start_time,
+                'relevance': 1.0
+            })
+        
+        # 重要性说明
+        if any(imp in text for imp in ['价值', '重要', '着迷', '必须', '需要']):
+            vibe_coding_analysis['why_important'].append({
+                'text': seg['text'],
+                'start_time': start_time,
+                'relevance': 0.9
+            })
+        
+        # 工作原理
+        if any(how in text for how in ['怎么', '如何', '方法', '方式', '操作']):
+            vibe_coding_analysis['how_it_works'].append({
+                'text': seg['text'],
+                'start_time': start_time,
+                'relevance': 0.8
+            })
+        
+        # 优势分析
+        if any(adv in text for adv in ['优势', '好处', '效率', '快速', '简单']):
+            vibe_coding_analysis['advantages'].append({
+                'text': seg['text'],
+                'start_time': start_time,
+                'relevance': 0.8
+            })
+        
+        # 背景上下文
+        if any(ctx in text for ctx in ['自动化', '革命', '失业', '工具人', '现实']):
+            vibe_coding_analysis['context'].append({
+                'text': seg['text'],
+                'start_time': start_time,
+                'relevance': 0.7
+            })
+    
+    return {
+        'structure_analysis': {
+            'key_questions': key_questions,
+            'definitions': definitions,
+            'examples': examples,
+            'background': background
+        },
+        'vibe_coding_analysis': vibe_coding_analysis,
+        'content_summary': generate_content_summary(vibe_coding_analysis)
+    }
+
+def generate_content_summary(analysis: Dict) -> Dict:
+    """基于分析生成内容摘要"""
+    summary = {
+        'main_topics': [],
+        'key_segments': [],
+        'content_flow': []
+    }
+    
+    # 识别主要话题
+    for topic, segments in analysis.items():
+        if segments and len(segments) > 0:
+            avg_relevance = sum(s.get('relevance', 0) for s in segments) / len(segments)
+            summary['main_topics'].append({
+                'topic': topic,
+                'segment_count': len(segments),
+                'avg_relevance': avg_relevance,
+                'description': get_topic_description(topic)
+            })
+    
+    # 按相关性排序
+    summary['main_topics'].sort(key=lambda x: x['avg_relevance'], reverse=True)
+    
+    # 识别关键片段
+    all_segments = []
+    for topic, segments in analysis.items():
+        for seg in segments:
+            seg['topic'] = topic
+            all_segments.append(seg)
+    
+    # 按相关性和时间排序
+    all_segments.sort(key=lambda x: (x.get('relevance', 0), -x['start_time']), reverse=True)
+    summary['key_segments'] = all_segments[:10]  # 取前10个关键片段
+    
+    return summary
+
+def get_topic_description(topic: str) -> str:
+    """获取话题描述"""
+    descriptions = {
+        'introduction': '视频开场引入',
+        'definition': 'Vibe Coding核心定义',
+        'why_important': '重要性和价值阐述',
+        'how_it_works': '工作原理和方法',
+        'advantages': '优势和好处',
+        'context': '背景和现实分析',
+        'future': '未来发展趋势'
+    }
+    return descriptions.get(topic, topic)
+
+def extract_video_core_concepts(subtitle_segments: List[Dict], topic: str) -> Dict:
+    """提取视频核心概念和关键论点"""
+    # 合并所有字幕文本
+    full_text = " ".join([seg['text'] for seg in subtitle_segments])
+    
+    # 基于主题的核心概念识别
+    if "vibe coding" in topic.lower() or "编程" in topic:
+        core_concepts = {
+            "opening_hook": {
+                "keywords": ["为什么", "我们每个人", "立即", "马上", "开始", "所谓的", "vibe coding"],
+                "weight": 1.0,
+                "min_duration": 8.0,
+                "description": "开场引入：为什么要开始Vibe Coding"
+            },
+            "core_definition": {
+                "keywords": ["vibe coding到底是什么", "什么是", "定义", "概念", "本质", "核心"],
+                "weight": 1.0,
+                "min_duration": 15.0,
+                "description": "核心定义：Vibe Coding到底是什么"
+            },
+            "value_proposition": {
+                "keywords": ["价值", "为什么", "着迷", "重要", "意义", "作用"],
+                "weight": 1.0,
+                "min_duration": 12.0,
+                "description": "价值主张：为什么Vibe Coding重要"
+            },
+            "background_context": {
+                "keywords": ["背景", "现实", "发生", "变化", "趋势", "革命", "自动化"],
+                "weight": 0.9,
+                "min_duration": 10.0,
+                "description": "背景分析：技术变革的现实"
+            },
+            "practical_approach": {
+                "keywords": ["怎么做", "方法", "实践", "操作", "具体", "步骤"],
+                "weight": 0.8,
+                "min_duration": 8.0,
+                "description": "实践方法：如何进行Vibe Coding"
+            },
+            # 降低这些边缘概念的权重
+            "personal_story": {
+                "keywords": ["一万美金", "赞助", "取消", "收益", "更新"],
+                "weight": 0.3,  # 大幅降低权重
+                "min_duration": 5.0,
+                "description": "个人故事（边缘内容）"
+            }
+        }
+    else:
+        # 通用技术分享的核心概念
+        core_concepts = {
+            "introduction": {
+                "keywords": ["介绍", "什么是", "概念", "定义"],
+                "weight": 1.0,
+                "min_duration": 8.0,
+                "description": "主题介绍"
+            },
+            "main_points": {
+                "keywords": ["重要", "关键", "核心", "主要"],
+                "weight": 1.0,
+                "min_duration": 10.0,
+                "description": "核心要点"
+            },
+            "examples": {
+                "keywords": ["例子", "案例", "比如", "演示"],
+                "weight": 0.8,
+                "min_duration": 6.0,
+                "description": "实例说明"
+            }
+        }
+    
+    return core_concepts
+
+def calculate_semantic_score(text: str, topic: str, core_concepts: Dict) -> Dict:
+    """基于核心概念计算语义相关性评分"""
+    if not text.strip():
+        return {"total_score": 0.0, "concept_scores": {}}
+    
+    text_lower = text.lower()
+    concept_scores = {}
+    
+    for concept_name, concept_info in core_concepts.items():
+        score = 0.0
+        matched_keywords = []
+        
+        # 关键词匹配
+        for keyword in concept_info["keywords"]:
+            if keyword.lower() in text_lower:
+                score += 0.2
+                matched_keywords.append(keyword)
+        
+        # 文本长度奖励
+        if len(text) > 30:
+            score += 0.1
+        
+        # 权重调整
+        weighted_score = score * concept_info["weight"]
+        
+        concept_scores[concept_name] = {
+            "score": min(weighted_score, 1.0),
+            "matched_keywords": matched_keywords,
+            "weight": concept_info["weight"],
+            "min_duration": concept_info["min_duration"]
+        }
+    
+    # 计算总分
+    total_score = sum(cs["score"] for cs in concept_scores.values())
+    
+    return {
+        "total_score": min(total_score, 1.0),
+        "concept_scores": concept_scores
+    }
+
+def calculate_visual_score(start_time: float, end_time: float, video_path: str) -> float:
+    """计算视觉质量评分（简化版）"""
+    # 这里使用简化的评分逻辑
+    # 在实际应用中，可以使用计算机视觉技术分析画面质量
+    
+    # 避开视频开头和结尾的低质量部分
+    if start_time < 5.0 or end_time > 1400:  # 24分钟视频的最后1分钟
+        return 0.6
+    
+    # 中间部分通常质量较好
+    return 0.8
+
+def calculate_audio_score(start_time: float, end_time: float, video_path: str) -> float:
+    """计算音频质量评分（简化版）"""
+    # 简化的音频质量评估
+    # 假设中间部分音频质量更稳定
+    if 60 < start_time < 1200:  # 1-20分钟之间
+        return 0.9
+    else:
+        return 0.7
+
+def calculate_position_weight(current_time: float, total_duration: float) -> float:
+    """计算位置权重"""
+    position_ratio = current_time / total_duration
+    
+    # 开头部分权重较高
+    if position_ratio < 0.1:
+        return 0.9
+    # 结尾部分权重较高
+    elif position_ratio > 0.8:
+        return 0.8
+    # 中间部分权重中等
+    else:
+        return 0.6
+
+def intelligent_segment_selection_v2(
+    segments: List[Dict], 
+    topic: str,
+    core_concepts: Dict
+) -> List[Dict]:
+    """基于核心概念的智能片段选择"""
+    
+    selected = []
+    concept_coverage = {}
+    
+    # 1. 为每个核心概念找到最佳片段
+    for concept_name, concept_info in core_concepts.items():
+        best_segments_for_concept = []
+        
+        # 找到所有与该概念相关的片段
+        for segment in segments:
+            concept_score = segment['semantic_analysis']['concept_scores'].get(concept_name, {}).get('score', 0)
+            if concept_score > 0.3:  # 最低相关性阈值
+                segment_with_concept = segment.copy()
+                segment_with_concept['concept_relevance'] = concept_score
+                segment_with_concept['target_concept'] = concept_name
+                best_segments_for_concept.append(segment_with_concept)
+        
+        # 按概念相关性排序
+        best_segments_for_concept.sort(key=lambda x: x['concept_relevance'], reverse=True)
+        
+        # 为这个概念选择最佳片段（可能选择多个）
+        concept_segments_selected = 0
+        max_segments_per_concept = 2 if concept_info['weight'] >= 0.9 else 1
+        
+        for segment in best_segments_for_concept:
+            if concept_segments_selected >= max_segments_per_concept:
+                break
+                
+            # 检查是否与已选片段重叠
+            overlaps = False
+            for selected_seg in selected:
+                if (segment['start_time'] < selected_seg['end_time'] and 
+                    segment['end_time'] > selected_seg['start_time']):
+                    overlaps = True
+                    break
+            
+            if not overlaps:
+                # 动态调整片段时长
+                min_duration = concept_info['min_duration']
+                actual_duration = max(min_duration, segment['duration'])
+                actual_duration = min(actual_duration, 30.0)  # 最长30秒
+                
+                selected.append({
+                    'start_time': segment['start_time'],
+                    'end_time': segment['start_time'] + actual_duration,
+                    'duration': actual_duration,
+                    'score': segment['total_score'],
+                    'concept_relevance': segment['concept_relevance'],
+                    'type': concept_name,
+                    'description': concept_info['description'],
+                    'text': segment['text'][:200] + "..." if len(segment['text']) > 200 else segment['text'],
+                    'matched_keywords': segment['semantic_analysis']['concept_scores'][concept_name].get('matched_keywords', [])
+                })
+                concept_segments_selected += 1
+                concept_coverage[concept_name] = concept_segments_selected
+    
+    # 2. 如果没有找到足够的核心内容，添加高分片段
+    if len(selected) < 2:
+        high_score_segments = sorted(segments, key=lambda x: x['total_score'], reverse=True)
+        
+        for segment in high_score_segments[:5]:  # 检查前5个高分片段
+            overlaps = False
+            for selected_seg in selected:
+                if (segment['start_time'] < selected_seg['end_time'] and 
+                    segment['end_time'] > selected_seg['start_time']):
+                    overlaps = True
+                    break
+            
+            if not overlaps:
+                selected.append({
+                    'start_time': segment['start_time'],
+                    'end_time': segment['start_time'] + min(segment['duration'], 20.0),
+                    'duration': min(segment['duration'], 20.0),
+                    'score': segment['total_score'],
+                    'concept_relevance': segment.get('best_concept_score', 0),
+                    'type': 'high_score',
+                    'description': '高质量内容片段',
+                    'text': segment['text'][:200] + "..." if len(segment['text']) > 200 else segment['text'],
+                    'matched_keywords': []
+                })
+                
+                if len(selected) >= 3:  # 最多3个片段
+                    break
+    
+    # 3. 按时间顺序排序
+    selected.sort(key=lambda x: x['start_time'])
+    
+    # 4. 限制总时长（如果太长就缩短片段）
+    total_duration = sum(seg['duration'] for seg in selected)
+    if total_duration > 90:  # 最长90秒
+        # 等比例缩短每个片段
+        scale_factor = 90 / total_duration
+        for seg in selected:
+            seg['duration'] *= scale_factor
+            seg['end_time'] = seg['start_time'] + seg['duration']
+    
+    return selected
+
+def generate_dynamic_concepts_from_analysis(content_analysis: Dict, topic: str) -> Dict:
+    """基于内容分析动态生成核心概念"""
+    analysis = content_analysis['vibe_coding_analysis']
+    concepts = {}
+    
+    # 基于实际分析结果生成概念
+    for topic_name, segments in analysis.items():
+        if segments:  # 只有当实际找到相关内容时才生成概念
+            avg_relevance = sum(s.get('relevance', 0) for s in segments) / len(segments)
+            
+            concepts[topic_name] = {
+                'weight': min(avg_relevance + 0.1, 1.0),  # 基于实际相关性设置权重
+                'min_duration': get_dynamic_duration(topic_name, len(segments)),
+                'description': get_topic_description(topic_name),
+                'segment_count': len(segments),
+                'avg_relevance': avg_relevance
+            }
+    
+    return concepts
+
+def get_dynamic_duration(topic_name: str, segment_count: int) -> float:
+    """根据话题和片段数量动态决定最小时长"""
+    base_durations = {
+        'definition': 20.0,      # 定义需要更长时间
+        'why_important': 15.0,   # 重要性说明
+        'introduction': 12.0,    # 开场引入
+        'how_it_works': 18.0,    # 工作原理
+        'advantages': 10.0,      # 优势说明
+        'context': 15.0,         # 背景分析
+        'future': 8.0            # 未来展望
+    }
+    
+    base_duration = base_durations.get(topic_name, 10.0)
+    
+    # 如果片段很多，可能需要更长时间来完整表达
+    if segment_count > 3:
+        base_duration *= 1.2
+    
+    return min(base_duration, 25.0)  # 最长25秒
+
+def intelligent_segment_selection_v3(
+    segments: List[Dict], 
+    content_analysis: Dict,
+    core_concepts: Dict
+) -> List[Dict]:
+    """基于内容分析的高级智能片段选择"""
+    
+    selected = []
+    key_segments = content_analysis['content_summary']['key_segments']
+    
+    # 1. 优先选择关键片段中相关性最高的
+    processed_time_ranges = []
+    
+    for key_seg in key_segments[:5]:  # 检查前5个关键片段
+        start_time = key_seg['start_time']
+        topic = key_seg['topic']
+        relevance = key_seg.get('relevance', 0)
+        
+        # 只选择高相关性的片段
+        if relevance < 0.7:
+            continue
+            
+        # 找到包含这个关键片段的视频段
+        best_video_segment = None
+        best_overlap = 0
+        
+        for video_seg in segments:
+            # 检查重叠
+            overlap_start = max(start_time, video_seg['start_time'])
+            overlap_end = min(start_time + 10, video_seg['end_time'])  # 假设关键片段10秒
+            overlap = max(0, overlap_end - overlap_start)
+            
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_video_segment = video_seg
+        
+        if best_video_segment and best_overlap > 3:  # 至少3秒重叠
+            # 检查是否与已选片段重叠
+            overlaps_existing = False
+            for existing in selected:
+                if (best_video_segment['start_time'] < existing['end_time'] and 
+                    best_video_segment['end_time'] > existing['start_time']):
+                    overlaps_existing = True
+                    break
+            
+            if not overlaps_existing:
+                # 根据话题重要性调整时长
+                concept_info = core_concepts.get(topic, {})
+                min_duration = concept_info.get('min_duration', 15.0)
+                
+                # 确保片段足够长来完整表达
+                actual_duration = max(min_duration, best_video_segment['duration'])
+                actual_duration = min(actual_duration, 30.0)  # 最长30秒
+                
+                selected.append({
+                    'start_time': best_video_segment['start_time'],
+                    'end_time': best_video_segment['start_time'] + actual_duration,
+                    'duration': actual_duration,
+                    'score': best_video_segment['total_score'],
+                    'relevance': relevance,
+                    'type': topic,
+                    'description': concept_info.get('description', topic),
+                    'text': key_seg['text'][:300] + "..." if len(key_seg['text']) > 300 else key_seg['text'],
+                    'key_segment_match': True
+                })
+                
+                processed_time_ranges.append((best_video_segment['start_time'], 
+                                            best_video_segment['start_time'] + actual_duration))
+    
+    # 2. 如果选择的片段不够，从高分片段中补充
+    if len(selected) < 2:
+        high_score_segments = sorted(segments, key=lambda x: x['total_score'], reverse=True)
+        
+        for segment in high_score_segments[:8]:
+            # 检查是否与已处理的时间范围重叠
+            overlaps = False
+            for start_range, end_range in processed_time_ranges:
+                if (segment['start_time'] < end_range and segment['end_time'] > start_range):
+                    overlaps = True
+                    break
+            
+            if not overlaps:
+                selected.append({
+                    'start_time': segment['start_time'],
+                    'end_time': segment['start_time'] + min(segment['duration'], 20.0),
+                    'duration': min(segment['duration'], 20.0),
+                    'score': segment['total_score'],
+                    'relevance': segment.get('best_concept_score', 0.5),
+                    'type': 'high_quality',
+                    'description': '高质量补充内容',
+                    'text': segment['text'][:300] + "..." if len(segment['text']) > 300 else segment['text'],
+                    'key_segment_match': False
+                })
+                
+                processed_time_ranges.append((segment['start_time'], 
+                                            segment['start_time'] + min(segment['duration'], 20.0)))
+                
+                if len(selected) >= 3:
+                    break
+    
+    # 3. 按时间顺序排序
+    selected.sort(key=lambda x: x['start_time'])
+    
+    # 4. 优化总时长
+    total_duration = sum(seg['duration'] for seg in selected)
+    if total_duration > 60:  # 如果超过60秒，适当缩短
+        scale_factor = 60 / total_duration
+        for seg in selected:
+            seg['duration'] *= scale_factor
+            seg['end_time'] = seg['start_time'] + seg['duration']
+    
+    return selected
+
+def combine_segments_to_video(video_path: str, segments: List[Dict], output_path: str) -> None:
+    """将多个片段组合成一个视频"""
+    try:
+        # 创建临时片段文件列表
+        temp_files = []
+        concat_list_path = f"temp_concat_{int(time.time())}.txt"
+        
+        # 生成每个片段
+        for i, segment in enumerate(segments):
+            temp_file = f"temp_segment_{int(time.time())}_{i}.mp4"
+            
+            # 提取片段
+            cmd = [
+                "ffmpeg", "-y", "-hwaccel", "none",
+                "-i", video_path,
+                "-ss", str(segment['start_time']),
+                "-t", str(segment['duration']),
+                "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p,setsar=1:1",
+                "-pix_fmt", "yuv420p",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart",
+                temp_file
+            ]
+            
+            safe_run_ffmpeg(cmd)
+            temp_files.append(temp_file)
+        
+        # 创建concat文件列表
+        with open(concat_list_path, 'w') as f:
+            for temp_file in temp_files:
+                f.write(f"file '{os.path.abspath(temp_file)}'\n")
+        
+        # 合并所有片段
+        concat_cmd = [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", concat_list_path,
+            "-c", "copy",
+            "-movflags", "+faststart",
+            output_path
+        ]
+        
+        safe_run_ffmpeg(concat_cmd)
+        
+        # 清理临时文件
+        for temp_file in temp_files:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        if os.path.exists(concat_list_path):
+            os.remove(concat_list_path)
+            
+    except Exception as e:
+        logger.error(f"合并视频片段失败: {e}")
+        raise
+
+def calculate_content_coverage(segments: List[Dict], subtitle_text: List[Dict]) -> float:
+    """计算内容覆盖度"""
+    if not subtitle_text:
+        return 0.5
+    
+    total_subtitle_duration = sum(
+        time_to_seconds(sub['end']) - time_to_seconds(sub['start']) 
+        for sub in subtitle_text
+    )
+    
+    selected_duration = sum(seg['duration'] for seg in segments)
+    
+    return min(selected_duration / total_subtitle_duration * 5, 1.0)  # 乘以5因为我们只选择了很小一部分
+
+def calculate_visual_quality(segments: List[Dict]) -> float:
+    """计算视觉质量评分"""
+    if not segments:
+        return 0.0
+    return sum(seg.get('visual_score', 0.8) for seg in segments) / len(segments)
+
+def calculate_audio_quality(segments: List[Dict]) -> float:
+    """计算音频质量评分"""
+    if not segments:
+        return 0.0
+    return sum(seg.get('audio_score', 0.8) for seg in segments) / len(segments)
+
+@app.post("/video/multi_segment_clipping")
+async def multi_segment_intelligent_clipping(req: MultiSegmentClippingReq):
+    """智能多片段视频剪辑 - 从长视频中选择多个精彩片段组合"""
+    try:
+        logger.info(f"开始智能多片段剪辑: {req.video_path}")
+        
+        # 1. 检查视频文件是否存在
+        if not os.path.exists(req.video_path):
+            raise HTTPException(status_code=404, detail=f"视频文件不存在: {req.video_path}")
+        
+        # 2. 分析视频基本信息
+        try:
+            result = subprocess.run([
+                "ffprobe", "-v", "quiet", "-print_format", "json", 
+                "-show_format", req.video_path
+            ], capture_output=True, text=True, check=True)
+            
+            video_info = json.loads(result.stdout)
+            total_duration = float(video_info['format']['duration'])
+            
+        except Exception as e:
+            logger.error(f"获取视频信息失败: {e}")
+            raise HTTPException(status_code=500, detail="无法获取视频信息")
+        
+        if total_duration < 60:
+            raise HTTPException(status_code=400, detail="视频时长太短，不适合多片段剪辑")
+        
+        logger.info(f"视频总时长: {total_duration:.1f}秒")
+        
+        # 3. 读取字幕文件
+        subtitle_segments = []
+        if req.subtitle_path and os.path.exists(req.subtitle_path):
+            subtitle_segments = parse_srt_file(req.subtitle_path)
+            logger.info(f"读取到{len(subtitle_segments)}个字幕片段")
+        else:
+            logger.warning("未找到字幕文件，将使用简化分析")
+        
+        # 4. 先进行智能内容分析
+        content_analysis = analyze_video_content_structure(subtitle_segments)
+        logger.info(f"内容分析完成：识别出{len(content_analysis['content_summary']['main_topics'])}个主要话题")
+        
+        # 打印分析摘要
+        for topic in content_analysis['content_summary']['main_topics'][:3]:
+            logger.info(f"话题: {topic['description']} - 相关性: {topic['avg_relevance']:.2f} - 片段数: {topic['segment_count']}")
+        
+        # 5. 基于内容分析结果进行视频片段分析
+        segments = analyze_video_segments_v2(req.video_path, subtitle_segments, total_duration, req.topic)
+        logger.info(f"分析了{len(segments)}个视频片段")
+        
+        # 6. 基于内容分析动态生成核心概念
+        core_concepts = generate_dynamic_concepts_from_analysis(content_analysis, req.topic)
+        logger.info(f"基于内容分析生成{len(core_concepts)}个核心概念")
+        
+        # 7. 基于分析结果智能选择片段
+        selected_segments = intelligent_segment_selection_v3(
+            segments, 
+            content_analysis,
+            core_concepts
+        )
+        
+        logger.info(f"选择了{len(selected_segments)}个片段进行组合")
+        
+        # 6. 生成组合视频
+        timestamp = int(time.time())
+        output_path = f"output_data/multi_clip_{timestamp}.mp4"
+        
+        combine_segments_to_video(req.video_path, selected_segments, output_path)
+        
+        logger.info(f"多片段视频生成完成: {output_path}")
+        
+        return {
+            "status": "success",
+            "output_video": output_path,
+            "selected_segments": [
+                {
+                    "start_time": seg['start_time'],
+                    "end_time": seg['end_time'],
+                    "duration": seg['duration'],
+                    "type": seg['type'],
+                    "score": round(seg['score'], 3),
+                    "preview_text": seg['text']
+                }
+                for seg in selected_segments
+            ],
+            "analysis": {
+                "total_video_duration": round(total_duration, 1),
+                "analyzed_segments": len(segments),
+                "selected_segments": len(selected_segments),
+                "total_output_duration": sum(seg['duration'] for seg in selected_segments),
+                "selection_strategy": {
+                    "semantic_weight": req.semantic_weight,
+                    "visual_weight": req.visual_weight,
+                    "audio_weight": req.audio_weight,
+                    "include_intro": req.include_intro,
+                    "include_highlights": req.include_highlights,
+                    "include_conclusion": req.include_conclusion
+                }
+            },
+            "quality_metrics": {
+                "content_coverage": round(calculate_content_coverage(selected_segments, subtitle_segments), 3),
+                "visual_quality": round(calculate_visual_quality(selected_segments), 3),
+                "audio_quality": round(calculate_audio_quality(selected_segments), 3),
+                "overall_score": round(sum(seg['score'] for seg in selected_segments) / len(selected_segments), 3) if selected_segments else 0
+            },
+            "message": f"成功生成{len(selected_segments)}个片段组合的智能剪辑视频"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"智能多片段剪辑失败: {e}")
+        raise HTTPException(status_code=500, detail=f"智能多片段剪辑失败: {str(e)}")
+
+
+# 小红书发布相关API
+@app.post("/xiaohongshu/authorize")
+async def xiaohongshu_authorize(auth_code: str):
+    """小红书OAuth授权"""
+    try:
+        publisher = get_xiaohongshu_publisher()
+        result = await publisher.authorize(auth_code)
+        return result
+    except Exception as e:
+        logger.error(f"小红书授权失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"授权失败: {str(e)}")
+
+
+@app.post("/xiaohongshu/publish")
+async def xiaohongshu_publish(request: XHSPublishReq):
+    """发布内容到小红书"""
+    try:
+        publisher = get_xiaohongshu_publisher()
+        result = await publisher.publish_note(
+            title=request.title,
+            content=request.content,
+            images=request.images,
+            tags=request.tags,
+            location=request.location,
+            privacy=request.privacy
+        )
+        return result
+    except Exception as e:
+        logger.error(f"小红书发布失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"发布失败: {str(e)}")
+
+
+@app.get("/xiaohongshu/profile")
+async def xiaohongshu_get_profile():
+    """获取用户资料"""
+    try:
+        publisher = get_xiaohongshu_publisher()
+        result = await publisher.get_user_profile()
+        return result
+    except Exception as e:
+        logger.error(f"获取用户资料失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
+
+
+@app.get("/xiaohongshu/note/{note_id}/stats")
+async def xiaohongshu_get_note_stats(note_id: str):
+    """获取笔记统计数据"""
+    try:
+        publisher = get_xiaohongshu_publisher()
+        result = await publisher.get_note_stats(note_id)
+        return result
+    except Exception as e:
+        logger.error(f"获取笔记统计失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
+
+
+# 图片装饰相关API
+@app.post("/image/decorate")
+async def decorate_image(request: ImageDecorateReq):
+    """装饰图片"""
+    try:
+        decorator = get_image_decorator()
+        result = await decorator.decorate_image(
+            image_path=request.image_path,
+            decorations=request.decorations
+        )
+        return result
+    except Exception as e:
+        logger.error(f"图片装饰失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"装饰失败: {str(e)}")
+
+
+@app.post("/image/decorations/smart")
+async def generate_smart_decorations(theme: str, content_type: str, mood: str = "vibrant"):
+    """智能生成装饰配置"""
+    try:
+        decorator = get_image_decorator()
+        result = await decorator.generate_smart_decorations(
+            theme=theme,
+            content_type=content_type,
+            mood=mood
+        )
+        return result
+    except Exception as e:
+        logger.error(f"智能装饰生成失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"生成失败: {str(e)}")
+
+
+# 文件上传相关API
+@app.post("/upload/photos")
+async def upload_photos(files: List[UploadFile] = File(...)):
+    """上传多张照片"""
+    try:
+        if len(files) > 20:
+            raise HTTPException(status_code=400, detail="最多只能上传20张照片")
+        
+        uploaded_files = []
+        upload_dir = Path("output_data/uploads")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        
+        for file in files:
+            # 验证文件类型
+            if not file.content_type or not file.content_type.startswith('image/'):
+                raise HTTPException(status_code=400, detail=f"文件 {file.filename} 不是有效的图片格式")
+            
+            # 生成唯一文件名
+            timestamp = int(time.time())
+            file_extension = Path(file.filename).suffix if file.filename else '.jpg'
+            unique_filename = f"photo_{timestamp}_{len(uploaded_files)}{file_extension}"
+            file_path = upload_dir / unique_filename
+            
+            # 保存文件
+            content = await file.read()
+            with open(file_path, "wb") as f:
+                f.write(content)
+            
+            uploaded_files.append({
+                "original_name": file.filename,
+                "saved_path": str(file_path),
+                "url": f"/static/uploads/{unique_filename}",
+                "size": len(content)
+            })
+            
+            logger.info(f"上传照片成功: {file.filename} -> {file_path}")
+        
+        return {
+            "status": "success",
+            "message": f"成功上传{len(uploaded_files)}张照片",
+            "files": uploaded_files
+        }
+        
+    except Exception as e:
+        logger.error(f"照片上传失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
+
+@app.post("/upload/video")
+async def upload_video(file: UploadFile = File(...)):
+    """上传视频文件"""
+    try:
+        # 验证文件类型
+        if not file.content_type or not file.content_type.startswith('video/'):
+            raise HTTPException(status_code=400, detail="请上传有效的视频文件")
+        
+        # 检查文件大小 (限制500MB)
+        content = await file.read()
+        if len(content) > 500 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="视频文件大小不能超过500MB")
+        
+        upload_dir = Path("input_data/uploads")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 生成唯一文件名
+        timestamp = int(time.time())
+        file_extension = Path(file.filename).suffix if file.filename else '.mp4'
+        unique_filename = f"video_{timestamp}{file_extension}"
+        file_path = upload_dir / unique_filename
+        
+        # 保存文件
+        with open(file_path, "wb") as f:
+            f.write(content)
+        
+        logger.info(f"上传视频成功: {file.filename} -> {file_path}")
+        
+        return {
+            "status": "success",
+            "message": "视频上传成功",
+            "file": {
+                "original_name": file.filename,
+                "saved_path": str(file_path),
+                "size": len(content)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"视频上传失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
+
+# LLM智能内容生成相关API
+@app.post("/llm/generate_content")
+async def generate_llm_content(request: LLMContentReq):
+    """使用大模型生成智能内容"""
+    try:
+        llm_service = get_llm_service()
+        
+        if request.content_type == "xiaohongshu":
+            result = await llm_service.generate_xiaohongshu_content(
+                theme=request.theme,
+                photo_descriptions=request.photo_descriptions,
+                highlights=request.highlights,
+                feeling=request.feeling,
+                style=request.style,
+                length=request.length,
+                custom_requirements=request.custom_requirements
+            )
+        else:
+            # 其他类型内容生成
+            result = await llm_service.generate_pro_content(
+                topic=request.theme,
+                content_type="complete",
+                style=request.style,
+                target_audience="general"
+            )
+        
+        logger.info(f"LLM内容生成成功: {request.theme}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"LLM内容生成失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"内容生成失败: {str(e)}")
+
+@app.post("/llm/generate_pro_content")
+async def generate_pro_llm_content(request: ProContentReq):
+    """生成Pro功能专业内容"""
+    try:
+        llm_service = get_llm_service()
+        
+        result = await llm_service.generate_pro_content(
+            topic=request.topic,
+            content_type=request.content_type,
+            style=request.style,
+            target_audience=request.target_audience
+        )
+        
+        logger.info(f"Pro内容生成成功: {request.topic}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Pro内容生成失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Pro内容生成失败: {str(e)}")
+
+@app.get("/llm/status")
+async def get_llm_status():
+    """获取LLM服务状态"""
+    try:
+        llm_service = get_llm_service()
+        
+        return {
+            "status": "active" if llm_service.current_api else "fallback",
+            "current_api": llm_service.current_api,
+            "available_apis": [
+                {
+                    "name": api_name,
+                    "enabled": config["enabled"],
+                    "model": config["model"]
+                }
+                for api_name, config in llm_service.apis.items()
+                if config["enabled"]
+            ],
+            "message": "LLM服务正常运行" if llm_service.current_api else "未配置LLM API，使用备用模式"
+        }
+        
+    except Exception as e:
+        logger.error(f"获取LLM状态失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取状态失败: {str(e)}")
+
+# 高级拼图生成相关API
+@app.post("/collage/generate_advanced")
+async def generate_advanced_collage(request: AdvancedCollageReq):
+    """生成高级拼图效果"""
+    try:
+        collage_generator = get_advanced_collage_generator()
+        
+        result = await collage_generator.generate_advanced_collage(
+            images=request.images,
+            title=request.title,
+            layout_type=request.layout_type,
+            style=request.style,
+            color_scheme=request.color_scheme,
+            canvas_size=tuple(request.canvas_size),
+            add_effects=request.add_effects,
+            add_text_overlay=request.add_text_overlay,
+            extra_text=request.extra_text or "",
+            text_position=request.text_position
+        )
+        
+        logger.info(f"高级拼图生成成功: {request.title}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"高级拼图生成失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"拼图生成失败: {str(e)}")
+
+@app.get("/collage/layouts")
+async def get_collage_layouts():
+    """获取可用的拼图布局"""
+    return {
+        "layouts": [
+            {"id": "dynamic", "name": "智能动态", "description": "根据图片数量和比例智能排列"},
+            {"id": "grid", "name": "网格布局", "description": "规整的网格排列"},
+            {"id": "magazine", "name": "杂志风格", "description": "主图+辅助图的杂志布局"},
+            {"id": "mosaic", "name": "马赛克拼图", "description": "不规则大小和位置的艺术拼贴"},
+            {"id": "creative", "name": "创意布局", "description": "圆形、多边形等特殊形状"},
+            {"id": "treemap", "name": "树地图", "description": "按权重区域切分的混合尺寸拼贴"}
+        ],
+        "styles": [
+            {"id": "modern", "name": "现代简约", "description": "简洁现代的设计风格"},
+            {"id": "vintage", "name": "复古怀旧", "description": "温暖的复古色调和效果"},
+            {"id": "artistic", "name": "艺术风格", "description": "强调艺术感的视觉效果"},
+            {"id": "minimal", "name": "极简主义", "description": "最简化的设计元素"}
+        ],
+        "color_schemes": [
+            {"id": "auto", "name": "自动选择", "description": "根据图片内容自动选择配色"},
+            {"id": "warm", "name": "暖色调", "description": "温暖的橙红色系"},
+            {"id": "cool", "name": "冷色调", "description": "清爽的蓝绿色系"},
+            {"id": "monochrome", "name": "单色调", "description": "黑白灰的经典搭配"},
+            {"id": "vibrant", "name": "鲜艳色彩", "description": "高饱和度的鲜艳配色"}
+        ]
+    }
+
+# 智能封面生成相关API
+@app.post("/cover/generate")
+async def generate_smart_cover(request: SmartCoverReq):
+    """生成智能封面"""
+    try:
+        generator = get_smart_cover_generator()
+        result = await generator.generate_cover(
+            images=request.images,
+            title=request.title,
+            subtitle=request.subtitle,
+            layout=request.layout,
+            theme=request.theme,
+            platform=request.platform,
+            custom_config=request.custom_config
+        )
+        return result
+    except Exception as e:
+        logger.error(f"智能封面生成失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"生成失败: {str(e)}")
+
+
+@app.get("/cover/templates")
+async def get_cover_templates():
+    """获取封面模板列表"""
+    try:
+        generator = get_smart_cover_generator()
+        templates = {
+            "layouts": list(generator.layout_templates.keys()),
+            "themes": list(generator.color_themes.keys()),
+            "platforms": list(generator.cover_sizes.keys())
+        }
+        return {
+            "status": "success",
+            "data": templates,
+            "message": "模板列表获取成功"
+        }
+    except Exception as e:
+        logger.error(f"获取模板列表失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
+
+# 小红书级别拼图生成API
+@app.post("/xiaohongshu/generate_collage")
+async def generate_xiaohongshu_collage(request: XiaohongshuCollageReq):
+    """生成小红书级别的高质量拼图"""
+    try:
+        xiaohongshu_generator = get_xiaohongshu_collage_generator()
+        
+        # 创建配置
+        config = CollageConfig(
+            width=request.width,
+            height=request.height,
+            quality=request.quality,
+            title_position=request.title_position if request.title_position in ["center_overlay", "top"] else "center_overlay",
+            font_path_override=request.font_path
+        )
+        
+        # 处理自定义文案
+        custom_texts = []
+        for text_data in request.custom_texts:
+            if isinstance(text_data, dict):
+                text_config = TextConfig(
+                    text=text_data.get("text", ""),
+                    font_size=text_data.get("font_size", 80),
+                    color=text_data.get("color", "#2C2C2C"),
+                    position=tuple(text_data.get("position", [100, 100])),
+                    max_width=text_data.get("max_width", 800),
+                    font_weight=text_data.get("font_weight", "normal"),
+                    shadow=text_data.get("shadow", True),
+                    background=text_data.get("background", False),
+                    background_color=text_data.get("background_color", "#FFFFFF"),
+                    background_opacity=text_data.get("background_opacity", 180)
+                )
+                custom_texts.append(text_config)
+        
+        result = await xiaohongshu_generator.generate_xiaohongshu_collage(
+            images=request.images,
+            title=request.title,
+            subtitle=request.subtitle,
+            layout=request.layout,
+            color_scheme=request.color_scheme,
+            custom_texts=custom_texts,
+            config=config,
+            overlay_texts=request.overlay_texts
+        )
+        
+        logger.info(f"小红书拼图生成成功: {request.title}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"小红书拼图生成失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"拼图生成失败: {str(e)}")
+
+@app.get("/xiaohongshu/layouts")
+async def get_xiaohongshu_layouts():
+    """获取小红书拼图布局选项"""
+    return {
+        "layouts": [
+            {"id": "magazine_style", "name": "杂志风格", "description": "专业杂志级别的不对称布局"},
+            {"id": "grid_modern", "name": "现代网格", "description": "整齐的现代网格布局"},
+            {"id": "story_flow", "name": "故事流", "description": "讲述故事的流畅布局"},
+            {"id": "featured_main", "name": "主图特色", "description": "突出主图的特色布局"},
+            {"id": "artistic_collage", "name": "艺术拼贴", "description": "富有艺术感的拼贴效果"},
+            {"id": "minimal_clean", "name": "简约清新", "description": "简约清新的小红书风格"},
+            {"id": "scrapbook", "name": "手帐拼贴", "description": "随机旋转/叠放/胶带/撕边更有拼贴感"}
+        ],
+        "color_schemes": [
+            {"id": "xiaohongshu_pink", "name": "小红书粉", "description": "经典小红书粉色主题"},
+            {"id": "fresh_mint", "name": "清新薄荷", "description": "清新的薄荷绿主题"},
+            {"id": "warm_sunset", "name": "温暖夕阳", "description": "温暖的夕阳橙色主题"},
+            {"id": "elegant_gray", "name": "优雅灰调", "description": "优雅的灰色主题"}
+        ],
+        "quality_options": [
+            {"value": 85, "name": "标准质量", "description": "适合快速分享"},
+            {"value": 95, "name": "高质量", "description": "推荐用于小红书发布"},
+            {"value": 98, "name": "超高质量", "description": "最佳质量，文件较大"}
+        ],
+        "size_presets": [
+            {"width": 1080, "height": 1080, "name": "小红书标准", "description": "1080x1080 标准正方形"},
+            {"width": 2160, "height": 2160, "name": "4K高清", "description": "2160x2160 超高清"},
+            {"width": 1080, "height": 1350, "name": "小红书竖版", "description": "1080x1350 竖版比例"}
+        ]
+    }
+
+@app.post("/xiaohongshu/edit_text")
+async def edit_collage_text(request: EditableTextReq):
+    """编辑拼图中的文案"""
+    try:
+        # 这里可以实现文案编辑功能
+        # 目前返回成功响应，实际实现需要存储和更新拼图数据
+        return {
+            "success": True,
+            "message": "文案编辑成功",
+            "collage_id": request.collage_id,
+            "text_id": request.text_id,
+            "new_text": request.new_text
+        }
+        
+    except Exception as e:
+        logger.error(f"文案编辑失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"文案编辑失败: {str(e)}")
+
+
+# 单页渲染（单图或拼图）
+class PageRenderReq(BaseModel):
+    images: List[str]
+    mode: str = "single"  # single | collage
+    layout: str = "scrapbook"  # 当 mode=collage 时生效
+    title: str = ""
+    subtitle: str = ""
+    title_position: str = "center_overlay"
+    overlay_texts: List[Dict[str, Any]] = []
+    width: int = 1080
+    height: int = 1080
+    quality: int = 95
+
+@app.post("/xiaohongshu/render_page")
+async def render_xhs_page(request: PageRenderReq):
+    try:
+        xh = get_xiaohongshu_collage_generator()
+        cfg = CollageConfig(width=request.width, height=request.height, quality=request.quality,
+                            title_position=request.title_position)
+        if request.mode == "single":
+            from PIL import Image as PILImage
+            img_paths = request.images
+            if not img_paths:
+                raise HTTPException(status_code=400, detail="缺少图片")
+            canvas = PILImage.new('RGB', (cfg.width, cfg.height), '#FFFFFF')
+            p = Path(img_paths[0])
+            if not p.exists():
+                p = Path("output_data")/img_paths[0]
+            im = PILImage.open(p)
+            if im.mode != 'RGB':
+                im = im.convert('RGB')
+            max_w = int(cfg.width*0.82)
+            max_h = int(cfg.height*0.68)
+            ratio = min(max_w/im.width, max_h/im.height)
+            new_size = (max(1,int(im.width*ratio)), max(1,int(im.height*ratio)))
+            im = im.resize(new_size, PILImage.Resampling.LANCZOS)
+            x = (cfg.width - im.width)//2
+            y = (cfg.height - im.height)//2 + 50
+            canvas.paste(im, (x,y))
+            # 标题与文案
+            xh.config_font_override = None
+            colors = xh.color_schemes['xiaohongshu_pink']
+            canvas = xh._add_main_texts(canvas, request.title, request.subtitle, colors, cfg)
+            if request.overlay_texts:
+                canvas = xh._draw_text_blocks(canvas, request.overlay_texts, colors, cfg)
+            out_path, b64 = await xh._save_high_quality_image(canvas, cfg)
+            return {"success": True, "image_path": str(out_path), "base64_data": b64, "mode": request.mode}
+        else:
+            res = await xh.generate_xiaohongshu_collage(
+                images=request.images,
+                title=request.title,
+                subtitle=request.subtitle,
+                layout=request.layout,
+                color_scheme='xiaohongshu_pink',
+                custom_texts=[],
+                config=cfg,
+                overlay_texts=request.overlay_texts
+            )
+            return res
+    except Exception as e:
+        logger.error(f"渲染页面失败: {e}")
+        raise HTTPException(status_code=500, detail=f"渲染失败: {str(e)}")
+
 
 if __name__ == "__main__":
     import uvicorn

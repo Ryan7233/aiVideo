@@ -130,8 +130,11 @@ class AdvancedPhotoRankingService:
             # 7. 多样性优化
             final_selection = self._optimize_diversity(ranked_photos, top_k)
             
-            logger.info(f"高级照片选优完成，返回 {len(final_selection)} 张照片")
-            return final_selection
+            # 8. 清理不可序列化的对象
+            cleaned_selection = self._clean_for_serialization(final_selection)
+            
+            logger.info(f"高级照片选优完成，返回 {len(cleaned_selection)} 张照片")
+            return cleaned_selection
             
         except Exception as e:
             logger.error(f"高级照片选优失败: {e}")
@@ -749,6 +752,41 @@ class AdvancedPhotoRankingService:
         except Exception as e:
             logger.error(f"多样性优化失败: {e}")
             return ranked_photos[:top_k]
+    
+    def _clean_for_serialization(self, photos: List[Dict]) -> List[Dict]:
+        """清理数据结构，移除不可序列化的对象"""
+        cleaned_photos = []
+        
+        for photo in photos:
+            cleaned_photo = {}
+            
+            # 只保留基本的可序列化数据
+            serializable_keys = [
+                'photo_id', 'path', 'index', 'width', 'height', 'aspect_ratio',
+                'file_size', 'resolution_score', 'composition_score', 'color_harmony_score',
+                'lighting_score', 'subject_clarity_score', 'visual_interest_score',
+                'technical_quality_score', 'aesthetic_score', 'clip_score',
+                'semantic_relevance', 'is_duplicate', 'duplicate_group',
+                'similarity_scores', 'is_best_in_group', 'subject_consistency',
+                'final_score', 'context_relevance', 'diversity_penalty'
+            ]
+            
+            for key in serializable_keys:
+                if key in photo:
+                    value = photo[key]
+                    # 确保numpy类型转换为Python基础类型
+                    if hasattr(value, 'item'):  # numpy scalar
+                        cleaned_photo[key] = value.item()
+                    elif hasattr(value, 'tolist'):  # numpy array
+                        cleaned_photo[key] = value.tolist()
+                    else:
+                        cleaned_photo[key] = value
+            
+            # 添加排名信息
+            cleaned_photo['rank'] = len(cleaned_photos) + 1
+            cleaned_photos.append(cleaned_photo)
+        
+        return cleaned_photos
     
     def _calculate_diversity_score(self, candidate: Dict, selected: List[Dict]) -> float:
         """计算多样性分数"""
