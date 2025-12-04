@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2026 产业金融域业务架构规划</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f1f5f9;
+        }
+
+        .vertical-text {
+            writing-mode: vertical-rl;
+            letter-spacing: 0.1em;
+        }
+
+        .layer-header {
+            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+            color: white;
+            text-align: center;
+            font-weight: bold;
+            padding: 8px;
+            border-radius: 6px 6px 0 0;
+            font-size: 0.9rem;
+        }
+
+        .capability-box {
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+            padding: 8px;
+            font-size: 0.75rem;
+            color: #475569;
+            transition: all 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .capability-box:hover {
+            border-color: #3b82f6;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            transform: translateY(-1px);
+        }
+
+        .capability-box strong {
+            display: block;
+            color: #1e293b;
+            margin-bottom: 2px;
+            font-size: 0.8rem;
+        }
+
+        /* Tags */
+        .tag {
+            font-size: 0.6rem;
+            padding: 1px 4px;
+            border-radius: 3px;
+            display: inline-block;
+            margin-left: 4px;
+            font-weight: bold;
+        }
+
+        .tag-new {
+            background-color: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+        }
+
+        .tag-scale {
+            background-color: #dbeafe;
+            color: #1e40af;
+            border: 1px solid #bfdbfe;
+        }
+
+        .tag-risk {
+            background-color: #fef3c7;
+            color: #92400e;
+            border: 1px solid #fde68a;
+        }
+
+        .tag-core {
+            background-color: #dcfce7;
+            color: #166534;
+            border: 1px solid #bbf7d0;
+        }
+
+        .section-container {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            margin-bottom: 16px;
+            padding: 16px;
+            border: 1px solid #cbd5e1;
+        }
+    </style>
+</head>
+
+<body class="p-6 flex justify-center">
+
+    <div class="w-full max-w-[1400px] space-y-4" id="architecture-content">
+
+        <!-- Header -->
+        <div class="flex justify-between items-end border-b-2 border-slate-800 pb-4 mb-6">
+            <div>
+                <h1 class="text-3xl font-extrabold text-slate-900 tracking-tight">2026 产业金融域总体业务架构图</h1>
+                <p class="text-slate-500 text-sm mt-2 font-medium">战略导向：自营生意贷做强(B+底座) · 资金助贷做标 · 保理车金做深 · 基础能力重构</p>
+            </div>
+            <div class="flex gap-3 text-xs font-semibold">
+                <span class="flex items-center"><span
+                        class="w-2 h-2 bg-red-100 border border-red-400 mr-1"></span>新增/重构能力</span>
+                <span class="flex items-center"><span
+                        class="w-2 h-2 bg-blue-100 border border-blue-400 mr-1"></span>规模增长点</span>
+                <span class="flex items-center"><span
+                        class="w-2 h-2 bg-yellow-100 border border-yellow-400 mr-1"></span>风控/效率点</span>
+            </div>
+        </div>
+
+        <!-- Layer 1: Omni-Channel & Ecology -->
+        <div class="section-container bg-slate-50">
+            <div class="flex gap-4">
+                <div
+                    class="w-8 bg-slate-700 rounded text-white flex items-center justify-center font-bold text-xs vertical-text py-2">
+                    渠道与生态</div>
+                <div class="flex-1 grid grid-cols-4 gap-4">
+                    <!-- Online -->
+                    <div class="col-span-1 border-r border-slate-200 pr-4">
+                        <h4 class="text-xs font-bold text-slate-500 mb-2 uppercase">线上自营触点</h4>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="bg-white p-2 rounded border text-center text-xs font-bold text-blue-700">APP /
+                                H5 / 小程序</div>
+                            <div class="bg-white p-2 rounded border text-center text-xs font-bold text-blue-700">API 嵌入
+                                (B+)</div>
+                            <div class="bg-white p-2 rounded border text-center text-xs text-slate-600">企微私域</div>
+                            <div class="bg-white p-2 rounded border text-center text-xs text-slate-600">MGM 分享裂变</div>
+                        </div>
+                    </div>
+                    <!-- Partner -->
+                    <div class="col-span-1 border-r border-slate-200 pr-4">
+                        <h4 class="text-xs font-bold text-slate-500 mb-2 uppercase">合作方生态</h4>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="bg-white p-2 rounded border text-center text-xs text-slate-600">1688 / 快手 / 苏宁
+                            </div>
+                            <div class="bg-white p-2 rounded border text-center text-xs text-slate-600">中信分行/个贷协同</div>
+                            <div class="bg-white p-2 rounded border text-center text-xs text-slate-600">核企供应链 (10家)
+                            </div>
+                            <div class="bg-white p-2 rounded border text-center text-xs text-slate-600">易鑫 / 二手车商</div>
+                        </div>
+                    </div>
+                    <!-- Offline -->
+                    <div class="col-span-1 border-r border-slate-200 pr-4">
+                        <h4 class="text-xs font-bold text-slate-500 mb-2 uppercase">线下与地推 <span
+                                class="tag tag-new">NEW</span></h4>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="bg-white p-2 rounded border text-center text-xs text-slate-600">直销团队代码录入</div>
+                            <div class="bg-white p-2 rounded border text-center text-xs text-slate-600">服务商暗访/核实</div>
+                        </div>
+                    </div>
+                    <!-- Aggregator / Fund API -->
+                    <div class="col-span-1">
+                        <h4 class="text-xs font-bold text-slate-500 mb-2 uppercase">资金渠道 <span
+                                class="tag tag-scale">标准化</span></h4>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="bg-purple-50 p-2 rounded border border-purple-200 col-span-2">
+                                <div class="font-bold text-xs text-purple-900 text-center">API 标准化输出</div>
+                                <div class="text-[10px] text-purple-700 mt-1 text-center">统一接口 | RESTful规范</div>
+                            </div>
+                            <div class="bg-white p-2 rounded border border-slate-200 text-center">
+                                <div class="font-bold text-xs text-slate-700">配置化对接</div>
+                                <div class="text-[10px] text-slate-500 mt-1">策略可视化</div>
+                            </div>
+                            <div class="bg-white p-2 rounded border border-slate-200 text-center">
+                                <div class="font-bold text-xs text-slate-700">灵活分润</div>
+                                <div class="text-[10px] text-slate-500 mt-1">270亿规模</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Layer 2: Core Product Lines -->
+        <div class="section-container relative overflow-hidden">
+            <div class="absolute top-0 right-0 bg-blue-600 text-white text-[10px] px-2 py-1 rounded-bl">核心业务增长引擎</div>
+            <div class="flex gap-4">
+                <div
+                    class="w-8 bg-blue-600 rounded text-white flex items-center justify-center font-bold text-xs vertical-text py-2">
+                    四大产品线</div>
+                <div class="flex-1 grid grid-cols-4 gap-4">
+
+                    <!-- Product 1: Shengyi Dai -->
+                    <div class="bg-blue-50 rounded border border-blue-200 p-3">
+                        <h3 class="font-bold text-blue-800 mb-2 flex items-center">1. 生意贷 (自营核心) <i
+                                class="fas fa-crown text-yellow-500 ml-2"></i></h3>
+                        <div class="space-y-2">
+                            <div class="bg-white p-2 rounded border border-blue-100 shadow-sm">
+                                <div class="font-bold text-xs text-slate-700">个经/小微秒贷</div>
+                                <div class="text-[10px] text-slate-500 mt-1">流水自证 | 企店绑定 | 优客画像</div>
+                            </div>
+                            <!-- 新增：中信联合贷（股东协同） -->
+                            <div
+                                class="bg-indigo-50 p-2 rounded border border-indigo-200 shadow-sm relative overflow-hidden">
+                                <div class="absolute top-0 right-0 bg-indigo-500 text-white text-[9px] px-1 rounded-bl">
+                                    战略协同</div>
+                                <div class="font-bold text-xs text-indigo-900">中信联合贷 (母子协同)</div>
+                                <div class="text-[10px] text-indigo-700 mt-1">分行无贷户转化 | 烟商数据打通 | 联合权益</div>
+                            </div>
+                            <div class="bg-white p-2 rounded border border-blue-100 shadow-sm">
+                                <div class="font-bold text-xs text-slate-700">对公信贷 (SVIP)</div>
+                                <div class="text-[10px] text-slate-500 mt-1">委托操作人(财务总) | 独立担保人</div>
+                            </div>
+                            <div
+                                class="bg-blue-100 p-2 rounded border border-blue-200 text-center text-[10px] text-blue-700 font-bold">
+                                B+ 模式 (H5+API 标准化输出)
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Product 2: Supply Chain -->
+                    <div class="bg-slate-50 rounded border border-slate-200 p-3">
+                        <h3 class="font-bold text-slate-800 mb-2">2. 供应链/保理</h3>
+                        <div class="space-y-2">
+                            <div class="bg-white p-2 rounded border border-slate-200">
+                                <div class="font-bold text-xs text-slate-700">再保理/直接保理</div>
+                                <div class="text-[10px] text-slate-500 mt-1">运营商(中移/甜橙) | 信用+</div>
+                            </div>
+                            <div class="bg-white p-2 rounded border border-slate-200">
+                                <div class="font-bold text-xs text-slate-700">创新交易类资产</div>
+                                <div class="text-[10px] text-slate-500 mt-1">小额分散店铺保理 | 多店铺模式</div>
+                            </div>
+                            <div class="bg-white p-2 rounded border border-slate-200">
+                                <div class="font-bold text-xs text-slate-700">应收账款质押</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Product 3: Auto Finance -->
+                    <div class="bg-orange-50 rounded border border-orange-200 p-3">
+                        <h3 class="font-bold text-orange-800 mb-2">3. 车生态金融</h3>
+                        <div class="space-y-2">
+                            <div class="bg-white p-2 rounded border border-orange-100">
+                                <div class="font-bold text-xs text-slate-700">自营二手车</div>
+                                <div class="text-[10px] text-slate-500 mt-1">线上抵押/解押 | 自动放款</div>
+                            </div>
+                            <div class="bg-white p-2 rounded border border-orange-100">
+                                <div class="font-bold text-xs text-slate-700">车险分期 (创新)</div>
+                            </div>
+                            <div class="bg-white p-2 rounded border border-orange-100">
+                                <div class="font-bold text-xs text-slate-700">存量挖掘 (车+贷)</div>
+                            </div>
+                            <!-- 新增账号重构 -->
+                            <div class="bg-red-50 p-2 rounded border border-red-200 relative">
+                                <div class="absolute top-0 right-0 bg-red-500 text-white text-[8px] px-1 rounded-bl">
+                                    高危重构</div>
+                                <div class="font-bold text-xs text-red-900">账号体系重构</div>
+                                <div class="text-[10px] text-red-700 mt-1">进件账号解耦 | 流程三改二</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Product 4: Co-lending -->
+                    <div class="bg-purple-50 rounded border border-purple-200 p-3">
+                        <h3 class="font-bold text-purple-800 mb-2">4. 资金助贷</h3>
+                        <div class="space-y-2">
+                            <div class="bg-white p-2 rounded border border-purple-100">
+                                <div class="font-bold text-xs text-slate-700">百信标准助贷产品</div>
+                                <div class="text-[10px] text-slate-500 mt-1">API标准化 | 降低对接成本</div>
+                            </div>
+                            <div class="bg-white p-2 rounded border border-purple-100">
+                                <div class="font-bold text-xs text-slate-700">联合贷/流转</div>
+                                <div class="text-[10px] text-slate-500 mt-1">资产流转 | 保证金/代偿管理</div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- Layer 3: Business Capabilities (Detailed) -->
+        <div class="section-container">
+            <div class="flex gap-4">
+                <div
+                    class="w-8 bg-indigo-600 rounded text-white flex items-center justify-center font-bold text-xs vertical-text py-2">
+                    业务中台能力</div>
+                <div class="flex-1 grid grid-cols-4 gap-4">
+
+                    <!-- Capability 1: Marketing & Customer -->
+                    <div class="col-span-1 space-y-2">
+                        <div class="layer-header bg-indigo-500">获客与营销</div>
+                        <div class="capability-box">
+                            <strong>权益中心升级 <span class="tag tag-new">NEW</span></strong>
+                            固定利率券 | 多次券 | 批量扣款券
+                        </div>
+                        <div class="capability-box">
+                            <strong>精准营销工具</strong>
+                            潜客额度预估H5 | 一口价促首支 | 积分H5
+                        </div>
+                        <div class="capability-box">
+                            <strong>协同营销</strong>
+                            中信联合权益匹配 | 业务对账
+                        </div>
+                        <div class="capability-box">
+                            <strong>客户服务 CRM <span class="tag tag-risk">Q1</span></strong>
+                            LBS打卡 | 暗访派单 | 满意度反馈 | 复借维护
+                        </div>
+                    </div>
+
+                    <!-- Capability 2: Credit & Risk (Pre-loan) -->
+                    <div class="col-span-1 space-y-2">
+                        <div class="layer-header bg-indigo-500">进件与信审 (贷前)</div>
+                        <div class="capability-box">
+                            <strong>流水自证全流程 <span class="tag tag-core">重点</span></strong>
+                            微信/支付宝/银行PDF采集+识别+解析
+                        </div>
+                        <div class="capability-box">
+                            <strong>视频信审能力 <span class="tag tag-risk">Q2</span></strong>
+                            企微视频信审 | 语音记录 | 远程确权
+                        </div>
+                        <div class="capability-box">
+                            <strong>企业/关联方图谱</strong>
+                            企店绑定 | 担保人复用 | 独立担保人签约
+                        </div>
+                        <div class="capability-box">
+                            <strong>信审提效工具</strong>
+                            补件坐席可视 | 授信流水参数查询 | 策略先行(摇数优化)
+                        </div>
+                        <div class="capability-box">
+                            <strong>数据融合接入</strong>
+                            银税互动(一键联登/4省4市) | 烟草数据 | 核企联登
+                        </div>
+                        <div class="capability-box">
+                            <strong>渠道接入配置化 <span class="tag tag-new">NEW</span></strong>
+                            路由配置 | 策略可视化 | 接入周期缩短50%
+                        </div>
+                    </div>
+
+                    <!-- Capability 3: Operation & Transaction (In-loan) -->
+                    <div class="col-span-1 space-y-2">
+                        <div class="layer-header bg-indigo-500">交易与营运 (贷中)</div>
+                        <div class="capability-box">
+                            <strong>智能还款中心</strong>
+                            自动拆单 | 多卡组合 | 二类户批扣返现
+                        </div>
+                        <div class="capability-box">
+                            <strong>提额与变更</strong>
+                            客户主动提额(补数据) | 法人/操作员变更重核 | 税务重查
+                        </div>
+                        <div class="capability-box">
+                            <strong>卡单处理系统 <span class="tag tag-scale">提效</span></strong>
+                            客户订单全链路状态 | 卡单原因透传 | 自动化台账
+                        </div>
+                        <div class="capability-box">
+                            <strong>资金闭环管理</strong>
+                            中信委托扣款 | 保证金户监控 | 在担余额管理
+                        </div>
+                    </div>
+
+                    <!-- Capability 4: Post-loan & Partner -->
+                    <div class="col-span-1 space-y-2">
+                        <div class="layer-header bg-indigo-500">贷后与渠道后管</div>
+                        <div class="capability-box">
+                            <strong>合伙人/渠道门户</strong>
+                            降级信息合并 | 授信失效透传 | 收益/还款明细展示
+                        </div>
+                        <div class="capability-box">
+                            <strong>资产保全</strong>
+                            小微借据延期线上化 | 法催自动组卷
+                        </div>
+                        <div class="capability-box">
+                            <strong>助贷后管平台 <span class="tag tag-new">NEW</span></strong>
+                            补单处理 | 授用还记录查询 | 代偿明细
+                        </div>
+                        <div class="capability-box">
+                            <strong>保理后管完善</strong>
+                            内外对账 | 差错处理 | 资产登记簿
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- Layer 4: Infrastructure & Foundation -->
+        <div class="section-container bg-slate-100 border-slate-300">
+            <div class="flex gap-4">
+                <div
+                    class="w-8 bg-slate-800 rounded text-white flex items-center justify-center font-bold text-xs vertical-text py-2">
+                    基础支撑</div>
+                <div class="flex-1 grid grid-cols-2 gap-4">
+                    <!-- Data & Reporting -->
+                    <div class="col-span-1 bg-white border border-slate-200 rounded p-2">
+                        <h5 class="text-xs font-bold text-slate-800 mb-1">数据资产与报表</h5>
+                        <ul class="text-[10px] text-slate-600 list-disc pl-3">
+                            <li>全链路漏斗转化报表 (节点级明细)</li>
+                            <li>协议签署信息集中存储 (PDF/URL标准化)</li>
+                            <li>ERP/税局数据批量补采与自动更新</li>
+                        </ul>
+                    </div>
+                    <!-- Tech & Risk -->
+                    <div class="col-span-1 bg-white border border-slate-200 rounded p-2">
+                        <h5 class="text-xs font-bold text-slate-800 mb-1">监控与风控底座</h5>
+                        <ul class="text-[10px] text-slate-600 list-disc pl-3">
+                            <li>业务类技术监控指标体系</li>
+                            <li>渠道控月提款规模 (实时风控)</li>
+                            <li>PDF/OCR 要素检查能力建立</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Legend -->
+        <div class="flex justify-between items-center text-xs text-slate-400 mt-2 px-2">
+            <div>
+                注：<span class="font-bold">B+</span> 为生意贷核心标准化接入模式，非独立产品线。
+            </div>
+            <div>
+                Produced by Tech Director Office | 2026 Planning
+            </div>
+        </div>
+
+    </div>
+
+</body>
+
+</html>
