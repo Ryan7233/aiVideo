@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core.config import API_HOST, API_PORT
+from core.runtime import ensure_runtime_directories
 
 def main():
     """启动API服务"""
@@ -23,8 +24,7 @@ def main():
     print("="*50)
     
     # Create necessary directories
-    Path("logs").mkdir(exist_ok=True)
-    Path("output_data").mkdir(exist_ok=True)
+    ensure_runtime_directories()
     
     try:
         uvicorn.run(

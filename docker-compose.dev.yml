@@ -71,7 +71,7 @@ services:
       - .:/app
     depends_on:
       - redis
-    command: celery -A worker.celery_app flower --basic-auth=admin:admin123
+    command: celery -A worker.celery_app flower --basic-auth=${FLOWER_BASIC_AUTH:-admin:change-me}
     networks:
       - ai-video-dev-network
 
@@ -83,8 +83,8 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin123
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-change-me-before-use}
     volumes:
       - minio_dev_data:/data
     command: server /data --console-address ":9001"

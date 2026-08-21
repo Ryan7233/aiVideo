@@ -6,7 +6,7 @@ set -e
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
-mkdir -p logs
+mkdir -p logs output_data/uploads input_data/downloads input_data/uploads models
 
 # Prefer project venv if present
 if [ -f ".venv/bin/activate" ]; then
@@ -42,5 +42,4 @@ done
 echo "API failed to start. Recent logs:"
 tail -n 120 logs/uvicorn.out || true
 exit 1
-
 

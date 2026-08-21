@@ -11,6 +11,7 @@ from loguru import logger
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
 import numpy as np
 from pathlib import Path
+from core.runtime import OUTPUT_DIR, resolve_media_path
 import io
 import base64
 import math
@@ -63,7 +64,7 @@ class XiaohongshuCollageGenerator:
     """小红书级别拼图生成器"""
     
     def __init__(self):
-        self.output_dir = Path("output_data/xiaohongshu_collages")
+        self.output_dir = OUTPUT_DIR / "xiaohongshu_collages"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # 高质量字体路径
@@ -345,10 +346,7 @@ class XiaohongshuCollageGenerator:
         for path in image_paths:
             try:
                 # 支持多种路径格式
-                if path.startswith('output_data/') or path.startswith('/'):
-                    full_path = Path(path)
-                else:
-                    full_path = Path("output_data") / path
+                full_path = resolve_media_path(path)
                 
                 if not full_path.exists():
                     logger.warning(f"图片不存在: {full_path}")

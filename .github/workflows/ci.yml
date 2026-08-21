@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Python tests
+        run: pytest -q
+      - name: Static syntax checks
+        run: |
+          python -m compileall -q api core routers worker tests
+          node --check frontend/script.js
+          node --check frontend/llm-integration.js
+          for file in scripts/*.sh; do bash -n "$file"; done

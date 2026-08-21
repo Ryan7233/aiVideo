@@ -30,25 +30,22 @@ class XiaohongshuPublisher:
             Dict: 授权结果
         """
         try:
-            # 模拟OAuth流程
-            # 实际需要调用小红书的OAuth API
+            # The official publishing integration is not configured in this project.
             mock_response = {
-                "access_token": f"mock_token_{int(time.time())}",
-                "refresh_token": f"mock_refresh_{int(time.time())}",
-                "expires_in": 7200,
-                "user_id": "mock_user_123",
-                "nickname": "AI创作者",
-                "avatar": "https://example.com/avatar.jpg"
+                "access_token": None,
+                "refresh_token": None,
+                "expires_in": 0,
+                "user_id": None,
+                "nickname": None,
+                "avatar": None,
             }
-            
-            self.access_token = mock_response["access_token"]
-            self.user_id = mock_response["user_id"]
-            
-            logger.info(f"小红书授权成功: {self.user_id}")
+
+            logger.info("返回小红书 OAuth 模拟结果，未建立授权会话")
             return {
-                "status": "success",
+                "status": "simulation",
                 "data": mock_response,
-                "message": "授权成功"
+                "authorized": False,
+                "message": "模拟授权结果：未连接小红书官方 OAuth"
             }
             
         except Exception as e:
@@ -84,15 +81,17 @@ class XiaohongshuPublisher:
         try:
             if not self.access_token:
                 return {
-                    "status": "error",
-                    "message": "请先完成授权"
+                    "status": "simulation",
+                    "published": False,
+                    "data": {"note_id": None, "url": None, "status": "not_published"},
+                    "message": "未接入小红书官方 OAuth 与发布 API，内容没有发送到外部平台",
                 }
             
             # 上传图片
             uploaded_images = []
             for image_path in images:
                 upload_result = await self._upload_image(image_path)
-                if upload_result["status"] == "success":
+                if upload_result["status"] in {"success", "simulation"}:
                     uploaded_images.append(upload_result["data"]["image_id"])
                 else:
                     logger.warning(f"图片上传失败: {image_path}")
@@ -118,22 +117,22 @@ class XiaohongshuPublisher:
             
             # 模拟发布API调用
             # 实际需要调用小红书的发布API
-            mock_note_id = f"note_{int(time.time())}"
             mock_response = {
-                "note_id": mock_note_id,
-                "url": f"https://www.xiaohongshu.com/explore/{mock_note_id}",
-                "status": "published",
-                "publish_time": int(time.time()),
-                "view_count": 0,
-                "like_count": 0,
-                "comment_count": 0
+                "note_id": None,
+                "url": None,
+                "status": "not_published",
+                "publish_time": None,
+                "view_count": None,
+                "like_count": None,
+                "comment_count": None,
             }
             
-            logger.info(f"小红书笔记发布成功: {mock_note_id}")
+            logger.info("返回小红书模拟发布结果，未向外部平台发送数据")
             return {
-                "status": "success",
+                "status": "simulation",
                 "data": mock_response,
-                "message": "发布成功"
+                "published": False,
+                "message": "模拟发布结果：内容没有发送到小红书"
             }
             
         except Exception as e:
@@ -173,9 +172,10 @@ class XiaohongshuPublisher:
             
             logger.info(f"图片上传成功: {image_path} -> {mock_image_id}")
             return {
-                "status": "success",
+                "status": "simulation",
                 "data": mock_response,
-                "message": "上传成功"
+                "uploaded": False,
+                "message": "模拟图片上传：文件没有发送到小红书"
             }
             
         except Exception as e:
@@ -199,19 +199,19 @@ class XiaohongshuPublisher:
             # 模拟获取统计数据
             mock_stats = {
                 "note_id": note_id,
-                "view_count": 1234,
-                "like_count": 89,
-                "comment_count": 12,
-                "collect_count": 34,
-                "share_count": 5,
-                "publish_time": int(time.time()) - 3600,
-                "status": "published"
+                "view_count": None,
+                "like_count": None,
+                "comment_count": None,
+                "collect_count": None,
+                "share_count": None,
+                "publish_time": None,
+                "status": "unavailable",
             }
             
             return {
-                "status": "success",
+                "status": "simulation",
                 "data": mock_stats,
-                "message": "获取成功"
+                "message": "模拟统计数据，不代表真实笔记表现"
             }
             
         except Exception as e:
@@ -231,8 +231,17 @@ class XiaohongshuPublisher:
         try:
             if not self.access_token:
                 return {
-                    "status": "error",
-                    "message": "请先完成授权"
+                    "status": "simulation",
+                    "data": {
+                        "user_id": None,
+                        "nickname": None,
+                        "avatar": None,
+                        "follower_count": None,
+                        "following_count": None,
+                        "note_count": None,
+                        "like_count": None,
+                    },
+                    "message": "未接入小红书官方 OAuth，无法读取真实用户资料",
                 }
             
             # 模拟获取用户资料
@@ -248,9 +257,9 @@ class XiaohongshuPublisher:
             }
             
             return {
-                "status": "success",
+                "status": "simulation",
                 "data": mock_profile,
-                "message": "获取成功"
+                "message": "模拟用户资料，不代表真实账号"
             }
             
         except Exception as e:

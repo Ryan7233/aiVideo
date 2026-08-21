@@ -1,7 +1,12 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Dict, Any, Optional
 from loguru import logger
+from core.runtime import resolve_media_path, validate_remote_url
+
+
+def _validate_source(value: str) -> str:
+    return f"file://{resolve_media_path(value)}" if value.startswith("file://") else validate_remote_url(value)
 
 try:
     from worker.celery_app import celery_app
@@ -30,6 +35,11 @@ class EnqueueVideoReq(BaseModel):
     max_sec: int = 25
     want_asr: bool = False
     output: Optional[str] = None
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value):
+        return _validate_source(value)
     
     model_config = {
         "json_schema_extra": {
@@ -49,6 +59,11 @@ class ASRTranscribeRequest(BaseModel):
     subtitle_format: str = "srt"
     task: str = "transcribe"
     model_size: str = "base"
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value):
+        return _validate_source(value)
     
     model_config = {
         "json_schema_extra": {
@@ -65,6 +80,11 @@ class ASRTranscribeRequest(BaseModel):
 class AudioExtractionRequest(BaseModel):
     url: str
     sample_rate: int = 16000
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value):
+        return _validate_source(value)
     
     model_config = {
         "json_schema_extra": {
@@ -83,6 +103,11 @@ class ASRSmartClippingRequest(BaseModel):
     model_size: str = "base"
     language: Optional[str] = None
     output_prefix: str = "asr_smart_clip"
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value):
+        return _validate_source(value)
     
     model_config = {
         "json_schema_extra": {
@@ -373,5 +398,3 @@ async def enqueue_semantic_analysis(req: SemanticAnalysisRequest) -> Dict[str, A
     except Exception as e:
         logger.error(f"Error enqueuing semantic analysis task: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to enqueue semantic analysis task: {str(e)}")
-
-

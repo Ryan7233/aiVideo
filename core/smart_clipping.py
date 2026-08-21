@@ -147,62 +147,44 @@ class SmartClippingEngine:
             List of audio energy measurements over time
         """
         try:
-            # 简化的音频能量分析，使用volumedetect
+            # Resample to 16 kHz and emit one real RMS measurement per second.
             cmd = [
-                "ffmpeg", "-hide_banner", "-i", video_path,
-                "-t", str(min(duration, 120)),  # 限制分析时长
-                "-af", "volumedetect",
+                "ffmpeg", "-hide_banner", "-nostats", "-i", video_path,
+                "-t", str(min(duration, 900)),
+                "-af", (
+                    "aresample=16000,asetnsamples=n=16000:p=0,"
+                    "astats=metadata=1:reset=1,"
+                    "ametadata=print:key=lavfi.astats.Overall.RMS_level"
+                ),
                 "-vn", "-f", "null", "-"
             ]
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
             stderr_output = result.stderr or ""
             
-            # 解析音量信息
-            volume_pattern = r"mean_volume: ([+-]?[0-9]*\.?[0-9]+) dB"
-            max_pattern = r"max_volume: ([+-]?[0-9]*\.?[0-9]+) dB"
-            
-            mean_match = re.search(volume_pattern, stderr_output)
-            max_match = re.search(max_pattern, stderr_output)
-            
             energy_data = []
-            
-            if mean_match and max_match:
-                mean_db = float(mean_match.group(1))
-                max_db = float(max_match.group(1))
-                
-                # 基于整体音量创建时间序列数据
-                # 这是一个简化的实现，实际项目中可以使用更复杂的分段分析
-                segment_count = max(1, min(duration // 5, 20))  # 每5秒一个段，最多20个段
-                segment_duration = duration / segment_count
-                
-                for i in range(segment_count):
-                    timestamp = i * segment_duration
-                    # 模拟音频能量变化，基于均值和最大值
-                    energy_variation = 0.8 + 0.2 * (i % 3) / 2  # 简单的变化模式
-                    estimated_db = mean_db * energy_variation
-                    energy_linear = max(0.0, min(1.0, (estimated_db + 60) / 60))
-                    
+            output = f"{result.stdout or ''}\n{stderr_output}"
+            current_timestamp = None
+            for line in output.splitlines():
+                time_match = re.search(r"pts_time:([0-9.]+)", line)
+                if time_match:
+                    current_timestamp = float(time_match.group(1))
+                rms_match = re.search(r"lavfi\.astats\.Overall\.RMS_level=([-+\w.]+)", line)
+                if rms_match and current_timestamp is not None:
+                    try:
+                        rms_db = float(rms_match.group(1))
+                    except ValueError:
+                        rms_db = -60.0
                     energy_data.append({
-                        'timestamp': timestamp,
-                        'rms_db': estimated_db,
-                        'energy': energy_linear,
+                        'timestamp': current_timestamp,
+                        'rms_db': rms_db,
+                        'energy': max(0.0, min(1.0, (rms_db + 60.0) / 60.0)),
                         'type': 'audio_energy'
                     })
             
             # 如果没有音频数据，尝试更简单的方法
             if not energy_data:
-                logger.info("No audio detected, creating default energy profile")
-                # 创建默认的能量分布
-                segment_count = max(1, min(duration // 10, 10))
-                for i in range(segment_count):
-                    timestamp = i * (duration / segment_count)
-                    energy_data.append({
-                        'timestamp': timestamp,
-                        'rms_db': -20.0,  # 默认音量
-                        'energy': 0.6,    # 默认能量
-                        'type': 'audio_energy'
-                    })
+                logger.info("No audio energy metadata detected")
             
             logger.info(f"Analyzed {len(energy_data)} audio energy points")
             return energy_data

@@ -77,8 +77,9 @@ class AdvancedPhotoRankingService:
             logger.error(f"CLIP模型加载失败: {e}")
             self.clip_model = None
     
-    def rank_photos_advanced(self, photos: List[str], top_k: int = 15, 
-                           context: Dict = None) -> List[Dict]:
+    def rank_photos_advanced(self, photos: List[str], top_k: int = 15,
+                           context: Dict = None, use_clip: bool = True,
+                           use_aesthetic_model: bool = True) -> List[Dict]:
         """
         高级照片选优排序
         
@@ -112,11 +113,16 @@ class AdvancedPhotoRankingService:
                 return []
             
             # 2. CLIP语义分析（如果可用）
-            if self.clip_model and CLIP_AVAILABLE:
+            if use_clip and self.clip_model and CLIP_AVAILABLE:
                 photo_features = self._add_clip_features(photo_features, context)
             
             # 3. 美学质量评分
-            photo_features = self._calculate_aesthetic_scores(photo_features)
+            if use_aesthetic_model:
+                photo_features = self._calculate_aesthetic_scores(photo_features)
+            else:
+                for photo in photo_features:
+                    photo['aesthetic_score'] = 0.5
+                    photo['aesthetic_components'] = {}
             
             # 4. 重复检测
             photo_features = self._detect_duplicates(photo_features)
@@ -153,7 +159,8 @@ class AdvancedPhotoRankingService:
                     'path': photo_path,
                     'index': index,
                     'file_size': Path(photo_path).stat().st_size,
-                    'basic_score': random.uniform(0.3, 0.8)
+                    'basic_score': 0.5,
+                    'analysis_mode': 'fallback_without_opencv',
                 }
             
             # 读取图像

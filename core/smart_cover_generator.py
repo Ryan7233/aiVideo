@@ -10,6 +10,7 @@ from loguru import logger
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 import numpy as np
 from pathlib import Path
+from core.runtime import OUTPUT_DIR
 import io
 import base64
 import math
@@ -19,7 +20,7 @@ class SmartCoverGenerator:
     """智能封面生成器"""
     
     def __init__(self):
-        self.output_dir = Path("output_data/covers")
+        self.output_dir = OUTPUT_DIR / "covers"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # 封面尺寸配置

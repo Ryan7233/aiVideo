@@ -3,7 +3,6 @@ import json
 import time
 import subprocess
 from pathlib import Path
-from urllib.request import urlretrieve
 from typing import List, Dict, Any
 
 from worker.celery_app import celery_app
@@ -25,6 +24,15 @@ logger = logging.getLogger(__name__)
 # Import core processing functions from api.main
 # We'll create a shared processing module to avoid circular imports
 from core.settings import settings
+from core.config import MAX_FILE_SIZE
+from core.runtime import DOWNLOAD_DIR, OUTPUT_DIR, download_public_file, resolve_media_path, resolve_output_path
+
+
+def _materialize_worker_source(url: str, prefix: str) -> str:
+    if url.startswith("file://"):
+        return str(resolve_media_path(url))
+    destination = DOWNLOAD_DIR / f"{prefix}_{int(time.time())}_{os.getpid()}.mp4"
+    return str(download_public_file(url, destination, MAX_FILE_SIZE))
 
 
 @celery_app.task(bind=True, name="worker.tasks.process_video_async")
@@ -39,32 +47,8 @@ def process_video_async(self, url: str, min_sec: int = 15, max_sec: int = 25, wa
         # Update task state
         self.update_state(state='PROGRESS', meta={'status': 'Downloading video...', 'progress': 10})
         
-        # Create directories
-        Path("input_data/downloads").mkdir(parents=True, exist_ok=True)
-        Path("output_data").mkdir(parents=True, exist_ok=True)
-        
-        # Download video (simplified version for now)
         ts = int(time.time())
-        if url.startswith("file://"):
-            # Local file
-            src_path = url.replace("file://", "")
-            dl_path = src_path
-        else:
-            # Download from URL
-            dl_path = str(Path("input_data/downloads") / f"async_dl_{ts}.mp4")
-            try:
-                # Try yt-dlp CLI first
-                cli_cmd = [
-                    "yt-dlp", "-f", "bv*+ba/b", "--merge-output-format", "mp4",
-                    "-o", dl_path, url
-                ]
-                result = subprocess.run(cli_cmd, capture_output=True, text=True, timeout=300)
-                if result.returncode != 0:
-                    # Fallback to direct download
-                    urlretrieve(url, dl_path)
-            except Exception as e:
-                logger.error(f"Download failed: {e}")
-                raise Exception(f"Failed to download video: {str(e)}")
+        dl_path = _materialize_worker_source(url, "async_dl")
         
         self.update_state(state='PROGRESS', meta={'status': 'Processing video...', 'progress': 40})
         
@@ -86,8 +70,7 @@ def process_video_async(self, url: str, min_sec: int = 15, max_sec: int = 25, wa
         self.update_state(state='PROGRESS', meta={'status': 'Generating clip...', 'progress': 70})
         
         # Generate output path
-        if not output:
-            output = str(Path("output_data") / f"async_intro_{ts}.mp4")
+        output = str(resolve_output_path(output, f"async_intro_{ts}.mp4"))
         
         # FFmpeg command for 9:16 conversion
         fade_out_start = max(0.1, duration - 0.25)
@@ -165,17 +148,8 @@ def asr_transcribe_async(self, url: str, language: str = None, subtitle_format: 
         # 更新任务状态
         self.update_state(state='PROGRESS', meta={'status': 'Preparing input...', 'progress': 10})
         
-        # 准备输入文件
         ts = int(time.time())
-        if url.startswith("file:"):
-            input_path = url.replace("file://", "")
-            if not Path(input_path).exists():
-                raise FileNotFoundError(f"Local file not found: {input_path}")
-        else:
-            # 下载文件
-            input_path = str(Path("input_data/downloads") / f"asr_async_{ts}.mp4")
-            Path("input_data/downloads").mkdir(parents=True, exist_ok=True)
-            urlretrieve(url, input_path)
+        input_path = _materialize_worker_source(url, "asr_async")
         
         self.update_state(state='PROGRESS', meta={'status': 'Loading ASR model...', 'progress': 20})
         
@@ -236,16 +210,8 @@ def extract_audio_async(self, url: str, sample_rate: int = 16000):
         
         self.update_state(state='PROGRESS', meta={'status': 'Preparing input...', 'progress': 20})
         
-        # 准备输入文件
         ts = int(time.time())
-        if url.startswith("file:"):
-            input_path = url.replace("file://", "")
-            if not Path(input_path).exists():
-                raise FileNotFoundError(f"Local file not found: {input_path}")
-        else:
-            input_path = str(Path("input_data/downloads") / f"audio_extract_async_{ts}.mp4")
-            Path("input_data/downloads").mkdir(parents=True, exist_ok=True)
-            urlretrieve(url, input_path)
+        input_path = _materialize_worker_source(url, "audio_extract_async")
         
         self.update_state(state='PROGRESS', meta={'status': 'Extracting audio...', 'progress': 50})
         
@@ -254,8 +220,7 @@ def extract_audio_async(self, url: str, sample_rate: int = 16000):
         asr_service = get_asr_service()
         
         video_stem = Path(input_path).stem
-        audio_path = f"output_data/{video_stem}_audio_async_{ts}.wav"
-        Path("output_data").mkdir(parents=True, exist_ok=True)
+        audio_path = str(OUTPUT_DIR / f"{video_stem}_audio_async_{ts}.wav")
         
         extracted_audio = asr_service.extract_audio_from_video(
             input_path,
@@ -329,21 +294,8 @@ def asr_smart_clipping_async(self, url: str, min_sec: int = 15, max_sec: int = 2
         # 任务状态更新
         self.update_state(state='PROGRESS', meta={'status': '准备处理...', 'progress': 5})
         
-        # 创建目录
-        Path("input_data/downloads").mkdir(parents=True, exist_ok=True)
-        Path("output_data").mkdir(parents=True, exist_ok=True)
-        
-        # 处理输入文件
         ts = int(time.time())
-        if url.startswith("file:"):
-            local_path = url.replace("file://", "")
-            if not Path(local_path).exists():
-                raise FileNotFoundError("本地文件不存在")
-            input_path = local_path
-        else:
-            input_path = str(Path("input_data/downloads") / f"asr_smart_{ts}.mp4")
-            self.update_state(state='PROGRESS', meta={'status': '下载视频...', 'progress': 10})
-            urlretrieve(url, input_path)
+        input_path = _materialize_worker_source(url, "asr_smart")
         
         # 1. ASR转录
         self.update_state(state='PROGRESS', meta={'status': '语音识别转录...', 'progress': 20})
@@ -385,7 +337,7 @@ def asr_smart_clipping_async(self, url: str, min_sec: int = 15, max_sec: int = 2
             )
             
             output_filename = f"{output_prefix}_{ts}_{i+1:02d}.mp4"
-            output_path = f"output_data/{output_filename}"
+            output_path = str(OUTPUT_DIR / output_filename)
             
             start_time = segment['start_hms']
             duration = segment['duration']
@@ -526,5 +478,4 @@ def semantic_analysis_async(self, text: str, include_keywords: bool = True,
         logger.error(f"Semantic analysis task failed: {str(e)}")
         self.update_state(state='FAILURE', meta={'error': str(e)})
         raise
-
 

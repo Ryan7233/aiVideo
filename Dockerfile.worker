@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 创建必要的目录
-RUN mkdir -p logs input_data output_data input_data/downloads
+RUN mkdir -p logs input_data/downloads input_data/uploads output_data/uploads models
 
 # 设置环境变量
 ENV PYTHONPATH=/app

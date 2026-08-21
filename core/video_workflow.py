@@ -1,0 +1,433 @@
+"""Production-oriented multi-segment video workflow.
+
+This module keeps blocking media work out of the FastAPI route layer and makes
+every request parameter participate in selection.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+import re
+import subprocess
+import uuid
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Sequence
+
+from core.runtime import OUTPUT_DIR, resolve_media_path
+from core.semantic_analysis import get_semantic_analyzer
+from core.smart_clipping import SmartClippingEngine
+from core.whisper_asr import get_asr_service
+
+
+logger = logging.getLogger(__name__)
+
+
+def _probe_duration(video_path: Path) -> float:
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "json",
+            str(video_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    return float(json.loads(result.stdout)["format"]["duration"])
+
+
+def _time_to_seconds(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace(",", ".")
+    parts = text.split(":")
+    try:
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + float(parts[1])
+        return float(parts[0])
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def _parse_srt(path: Path) -> List[Dict[str, Any]]:
+    segments: List[Dict[str, Any]] = []
+    content = path.read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n")
+    for block in re.split(r"\n\s*\n", content.strip()):
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        time_index = next((i for i, line in enumerate(lines) if "-->" in line), None)
+        if time_index is None:
+            continue
+        start_text, end_text = [part.strip() for part in lines[time_index].split("-->", 1)]
+        text = " ".join(lines[time_index + 1 :]).strip()
+        if text:
+            segments.append(
+                {
+                    "start": _time_to_seconds(start_text),
+                    "end": _time_to_seconds(end_text.split()[0]),
+                    "text": text,
+                }
+            )
+    return segments
+
+
+def _load_transcript(
+    video_path: Path,
+    subtitle_path: Optional[str],
+    enabled: bool,
+    model_size: str,
+    language: Optional[str],
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if subtitle_path:
+        path = resolve_media_path(subtitle_path)
+        return _parse_srt(path), {"source": "provided_subtitle", "path": str(path)}
+    if not enabled:
+        return [], {"source": "disabled"}
+
+    try:
+        service = get_asr_service(model_size=model_size)
+        result = service.transcribe_video(str(video_path), language=language, cleanup_audio=True)
+        segments = [
+            {
+                "start": float(item.get("start", 0)),
+                "end": float(item.get("end", 0)),
+                "text": item.get("text", "").strip(),
+            }
+            for item in result.get("segments", [])
+            if item.get("text", "").strip()
+        ]
+        return segments, {
+            "source": "whisper",
+            "language": result.get("language"),
+            "word_count": result.get("word_count", 0),
+            "segment_count": len(segments),
+        }
+    except Exception as exc:
+        logger.warning("ASR unavailable; continuing with measured audiovisual features: %s", exc)
+        return [], {"source": "unavailable", "error": str(exc)}
+
+
+def _points_in_window(points: Sequence[Dict[str, Any]], start: float, end: float) -> List[Dict[str, Any]]:
+    return [point for point in points if start <= float(point.get("timestamp", -1)) < end]
+
+
+def _topic_terms(topic: str) -> List[str]:
+    terms = [term.lower() for term in re.split(r"[\s,，、/|]+", topic) if len(term.strip()) >= 2]
+    return terms or ([topic.strip().lower()] if topic.strip() else [])
+
+
+def _semantic_score(text: str, topic: str, duration: float) -> tuple[float, Dict[str, Any]]:
+    if not text.strip():
+        return 0.0, {"quality": 0.0, "topic_match": 0.0}
+    analyzer = get_semantic_analyzer()
+    quality = analyzer.calculate_content_quality_score(text, duration)
+    terms = _topic_terms(topic)
+    lowered = text.lower()
+    matched = [term for term in terms if term in lowered]
+    topic_match = len(matched) / len(terms) if terms else quality.get("topic_relevance", 0.0)
+    score = min(1.0, quality.get("overall_score", 0.0) * 0.7 + topic_match * 0.3)
+    return score, {
+        "quality": quality.get("overall_score", 0.0),
+        "topic_match": topic_match,
+        "matched_terms": matched,
+    }
+
+
+def _build_candidates(
+    duration: float,
+    window_duration: float,
+    topic: str,
+    transcript: Sequence[Dict[str, Any]],
+    analysis: Dict[str, Any],
+    weights: Dict[str, float],
+) -> List[Dict[str, Any]]:
+    step = max(3.0, window_duration / 2.0)
+    last_start = max(0.0, duration - window_duration)
+    starts = [index * step for index in range(int(math.floor(last_start / step)) + 1)]
+    if not starts or abs(starts[-1] - last_start) > 0.5:
+        starts.append(last_start)
+
+    scenes = analysis.get("scene_changes", [])
+    audio = analysis.get("audio_energy", [])
+    motion = analysis.get("motion_activity", [])
+    has_semantics = bool(transcript)
+    active_weights = dict(weights)
+    if not has_semantics:
+        active_weights["semantic"] = 0.0
+    total_weight = sum(max(0.0, value) for value in active_weights.values()) or 1.0
+    active_weights = {key: max(0.0, value) / total_weight for key, value in active_weights.items()}
+
+    candidates: List[Dict[str, Any]] = []
+    for start in starts:
+        end = min(duration, start + window_duration)
+        window_scenes = _points_in_window(scenes, start, end)
+        window_motion = _points_in_window(motion, start, end)
+        window_audio = _points_in_window(audio, start, end)
+        window_text = " ".join(
+            segment["text"]
+            for segment in transcript
+            if float(segment["start"]) < end and float(segment["end"]) > start
+        ).strip()
+
+        ideal_scenes = max(1.0, (end - start) / 8.0)
+        scene_density = min(1.0, len(window_scenes) / ideal_scenes)
+        motion_density = min(1.0, len(window_motion) / max(1.0, end - start) * 2.0)
+        visual_score = scene_density * 0.65 + motion_density * 0.35
+        audio_score = (
+            sum(float(point.get("energy", 0.0)) for point in window_audio) / len(window_audio)
+            if window_audio
+            else 0.0
+        )
+        semantic_score, semantic_details = _semantic_score(window_text, topic, end - start)
+        total_score = (
+            semantic_score * active_weights["semantic"]
+            + visual_score * active_weights["visual"]
+            + audio_score * active_weights["audio"]
+        )
+        candidates.append(
+            {
+                "start_time": round(start, 3),
+                "end_time": round(end, 3),
+                "duration": round(end - start, 3),
+                "text": window_text,
+                "semantic_score": semantic_score,
+                "visual_score": visual_score,
+                "audio_score": audio_score,
+                "score": total_score,
+                "semantic_details": semantic_details,
+            }
+        )
+    return candidates
+
+
+def _overlaps(candidate: Dict[str, Any], selected: Iterable[Dict[str, Any]]) -> bool:
+    return any(
+        candidate["start_time"] < item["end_time"] and candidate["end_time"] > item["start_time"]
+        for item in selected
+    )
+
+
+def _pick_best(
+    candidates: Iterable[Dict[str, Any]],
+    selected: List[Dict[str, Any]],
+    kind: str,
+) -> bool:
+    available = [item for item in candidates if not _overlaps(item, selected)]
+    if not available:
+        return False
+    chosen = max(available, key=lambda item: item["score"]).copy()
+    chosen["type"] = kind
+    selected.append(chosen)
+    return True
+
+
+def _select_segments(
+    candidates: Sequence[Dict[str, Any]],
+    video_duration: float,
+    count: int,
+    include_intro: bool,
+    include_highlights: bool,
+    include_conclusion: bool,
+) -> List[Dict[str, Any]]:
+    selected: List[Dict[str, Any]] = []
+    if include_intro and len(selected) < count:
+        intro_candidates = [
+            item for item in candidates if item["start_time"] <= video_duration * 0.2
+        ]
+        if intro_candidates:
+            chosen = min(intro_candidates, key=lambda item: (item["start_time"], -item["score"])).copy()
+            chosen["type"] = "intro"
+            selected.append(chosen)
+    if include_conclusion and len(selected) < count:
+        conclusion_candidates = [
+            item
+            for item in candidates
+            if item["end_time"] >= video_duration * 0.8 and not _overlaps(item, selected)
+        ]
+        if conclusion_candidates:
+            chosen = max(
+                conclusion_candidates, key=lambda item: (item["end_time"], item["score"])
+            ).copy()
+            chosen["type"] = "conclusion"
+            selected.append(chosen)
+    if include_highlights:
+        for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
+            if len(selected) >= count:
+                break
+            if not _overlaps(candidate, selected):
+                chosen = candidate.copy()
+                chosen["type"] = "highlight"
+                selected.append(chosen)
+    for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
+        if len(selected) >= count:
+            break
+        if not _overlaps(candidate, selected):
+            chosen = candidate.copy()
+            chosen["type"] = "best_available"
+            selected.append(chosen)
+    return sorted(selected, key=lambda item: item["start_time"])
+
+
+def _run_ffmpeg(command: List[str], timeout: int = 600) -> None:
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr[-4000:] or "FFmpeg failed")
+
+
+def _combine_segments(video_path: Path, segments: Sequence[Dict[str, Any]], output_path: Path) -> None:
+    temp_files: List[Path] = []
+    concat_file = OUTPUT_DIR / f"concat_{uuid.uuid4().hex}.txt"
+    try:
+        for index, segment in enumerate(segments):
+            temp_file = OUTPUT_DIR / f"segment_{uuid.uuid4().hex}_{index}.mp4"
+            _run_ffmpeg(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-ss",
+                    str(segment["start_time"]),
+                    "-i",
+                    str(video_path),
+                    "-t",
+                    str(segment["duration"]),
+                    "-vf",
+                    "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p,setsar=1:1",
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "0:a?",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    "23",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    "128k",
+                    "-movflags",
+                    "+faststart",
+                    str(temp_file),
+                ]
+            )
+            temp_files.append(temp_file)
+        concat_file.write_text(
+            "".join(f"file '{path.as_posix()}'\n" for path in temp_files), encoding="utf-8"
+        )
+        _run_ffmpeg(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_file),
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+            ]
+        )
+    finally:
+        concat_file.unlink(missing_ok=True)
+        for path in temp_files:
+            path.unlink(missing_ok=True)
+
+
+def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
+    """Run the complete measured/semantic multi-segment workflow."""
+    video_path = resolve_media_path(options["video_path"])
+    video_duration = _probe_duration(video_path)
+    if video_duration < 8:
+        raise ValueError("视频时长至少需要 8 秒")
+
+    count = max(1, min(int(options.get("target_segments", 3)), 10))
+    desired_total = max(5.0, min(float(options.get("total_duration", 60)), video_duration))
+    if video_duration + 0.01 < count * 5:
+        raise ValueError(f"视频时长不足以生成 {count} 个至少 5 秒且互不重叠的片段")
+    requested_segment = options.get("segment_duration")
+    window_duration = float(requested_segment) if requested_segment else desired_total / count
+    window_duration = max(5.0, min(window_duration, 30.0, video_duration))
+    if window_duration * count > desired_total:
+        window_duration = max(5.0, desired_total / count)
+
+    transcript, transcription_meta = _load_transcript(
+        video_path,
+        options.get("subtitle_path"),
+        bool(options.get("enable_content_analysis", True)),
+        options.get("asr_model_size", "base"),
+        options.get("asr_language"),
+    )
+    analysis = SmartClippingEngine().analyze_video_content(
+        str(video_path), max_duration=min(900, int(math.ceil(video_duration)))
+    )
+    weights = {
+        "semantic": float(options.get("semantic_weight", 0.4)),
+        "visual": float(options.get("visual_weight", 0.3)),
+        "audio": float(options.get("audio_weight", 0.3)),
+    }
+    candidates = _build_candidates(
+        video_duration, window_duration, options.get("topic", ""), transcript, analysis, weights
+    )
+    selected = _select_segments(
+        candidates,
+        video_duration,
+        count,
+        bool(options.get("include_intro", True)),
+        bool(options.get("include_highlights", True)),
+        bool(options.get("include_conclusion", True)),
+    )
+    if not selected:
+        raise ValueError("未找到可用片段")
+
+    output_path = OUTPUT_DIR / f"multi_clip_{uuid.uuid4().hex}.mp4"
+    _combine_segments(video_path, selected, output_path)
+
+    for segment in selected:
+        segment["preview_text"] = segment.pop("text", "")[:300]
+        segment["score"] = round(segment["score"], 4)
+        segment["semantic_score"] = round(segment["semantic_score"], 4)
+        segment["visual_score"] = round(segment["visual_score"], 4)
+        segment["audio_score"] = round(segment["audio_score"], 4)
+
+    return {
+        "status": "success",
+        "output_video": f"output_data/{output_path.name}",
+        "selected_segments": selected,
+        "analysis": {
+            "total_video_duration": round(video_duration, 3),
+            "analyzed_segments": len(candidates),
+            "selected_segments": len(selected),
+            "total_output_duration": round(sum(item["duration"] for item in selected), 3),
+            "transcription": transcription_meta,
+            "selection_strategy": {
+                "weights": weights,
+                "target_segments": count,
+                "requested_total_duration": desired_total,
+                "segment_duration": window_duration,
+                "include_intro": bool(options.get("include_intro", True)),
+                "include_highlights": bool(options.get("include_highlights", True)),
+                "include_conclusion": bool(options.get("include_conclusion", True)),
+            },
+        },
+        "quality_metrics": {
+            "semantic_quality": round(sum(item["semantic_score"] for item in selected) / len(selected), 4),
+            "visual_quality": round(sum(item["visual_score"] for item in selected) / len(selected), 4),
+            "audio_quality": round(sum(item["audio_score"] for item in selected) / len(selected), 4),
+            "overall_score": round(sum(item["score"] for item in selected) / len(selected), 4),
+        },
+        "message": f"成功生成 {len(selected)} 个片段组合的智能剪辑视频",
+    }

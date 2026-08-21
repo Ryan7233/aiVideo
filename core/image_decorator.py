@@ -10,6 +10,7 @@ from loguru import logger
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 import numpy as np
 from pathlib import Path
+from core.runtime import OUTPUT_DIR
 import io
 import base64
 
@@ -97,7 +98,7 @@ class ImageDecorator:
                     self._add_element(draw, image.size, element_config)
             
             # 保存装饰后的图片
-            output_path = f"output_data/decorated_{int(time.time())}.png"
+            output_path = str(OUTPUT_DIR / f"decorated_{int(time.time())}.png")
             image.save(output_path, "PNG")
             
             # 转换为base64用于前端预览

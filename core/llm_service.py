@@ -14,37 +14,41 @@ class LLMService:
     """大语言模型服务类"""
     
     def __init__(self):
+        def configured(name: str) -> bool:
+            value = os.getenv(name, "").strip()
+            return bool(value) and not value.lower().startswith(("your_", "replace-", "example"))
+
         # 支持多种API配置
         self.apis = {
             "openai": {
                 "base_url": os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
                 "api_key": os.getenv("OPENAI_API_KEY", ""),
                 "model": os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
-                "enabled": bool(os.getenv("OPENAI_API_KEY"))
+                "enabled": configured("OPENAI_API_KEY")
             },
             "claude": {
                 "base_url": os.getenv("CLAUDE_API_BASE", "https://api.anthropic.com/v1"),
                 "api_key": os.getenv("CLAUDE_API_KEY", ""),
                 "model": os.getenv("CLAUDE_MODEL", "claude-3-haiku-20240307"),
-                "enabled": bool(os.getenv("CLAUDE_API_KEY"))
+                "enabled": configured("CLAUDE_API_KEY")
             },
             "gemini": {
                 "base_url": os.getenv("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta"),
                 "api_key": os.getenv("GEMINI_API_KEY", ""),
                 "model": os.getenv("GEMINI_MODEL", "gemini-pro"),
-                "enabled": bool(os.getenv("GEMINI_API_KEY"))
+                "enabled": configured("GEMINI_API_KEY")
             },
             "zhipu": {
                 "base_url": os.getenv("ZHIPU_API_BASE", "https://open.bigmodel.cn/api/paas/v4"),
                 "api_key": os.getenv("ZHIPU_API_KEY", ""),
                 "model": os.getenv("ZHIPU_MODEL", "glm-4"),
-                "enabled": bool(os.getenv("ZHIPU_API_KEY"))
+                "enabled": configured("ZHIPU_API_KEY")
             },
             "qwen": {
                 "base_url": os.getenv("QWEN_API_BASE", "https://dashscope.aliyuncs.com/api/v1"),
                 "api_key": os.getenv("QWEN_API_KEY", ""),
                 "model": os.getenv("QWEN_MODEL", "qwen-turbo"),
-                "enabled": bool(os.getenv("QWEN_API_KEY"))
+                "enabled": configured("QWEN_API_KEY")
             }
         }
         

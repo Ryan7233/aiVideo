@@ -8,6 +8,7 @@ import numpy as np
 import subprocess
 from typing import List, Dict, Tuple, Optional
 from pathlib import Path
+from core.runtime import OUTPUT_DIR
 import json
 import tempfile
 import librosa
@@ -157,7 +158,7 @@ class AudioProcessingService:
     def _extract_audio_from_video(self, video_path: str) -> Optional[str]:
         """从视频中提取音频"""
         try:
-            output_dir = Path("output_data/audio_temp")
+            output_dir = OUTPUT_DIR / "audio_temp"
             output_dir.mkdir(parents=True, exist_ok=True)
             
             audio_filename = f"extracted_{Path(video_path).stem}.wav"
@@ -368,7 +369,7 @@ class AudioProcessingService:
     def _enhance_speech_audio(self, audio_path: str, audio_analysis: Dict) -> str:
         """增强语音音频"""
         try:
-            output_dir = Path("output_data/audio_temp")
+            output_dir = OUTPUT_DIR / "audio_temp"
             enhanced_filename = f"enhanced_{Path(audio_path).stem}.wav"
             enhanced_path = output_dir / enhanced_filename
             
@@ -496,7 +497,7 @@ class AudioProcessingService:
     def _generate_bgm_audio(self, bgm_info: Dict, duration: float) -> Optional[str]:
         """生成BGM音频"""
         try:
-            output_dir = Path("output_data/audio_temp")
+            output_dir = OUTPUT_DIR / "audio_temp"
             bgm_filename = f"bgm_{bgm_info['name']}_{int(duration)}.wav"
             bgm_path = output_dir / bgm_filename
             
@@ -626,7 +627,7 @@ class AudioProcessingService:
     def _mix_audio_tracks(self, speech_path: str, bgm_path: str, style: str) -> str:
         """混合音频轨道"""
         try:
-            output_dir = Path("output_data/audio_temp")
+            output_dir = OUTPUT_DIR / "audio_temp"
             mixed_filename = f"mixed_{Path(speech_path).stem}.wav"
             mixed_path = output_dir / mixed_filename
             
@@ -669,7 +670,7 @@ class AudioProcessingService:
     def _optimize_final_audio(self, audio_path: str, audio_analysis: Dict) -> str:
         """优化最终音频"""
         try:
-            output_dir = Path("output_data/audio_temp")
+            output_dir = OUTPUT_DIR / "audio_temp"
             optimized_filename = f"optimized_{Path(audio_path).stem}.wav"
             optimized_path = output_dir / optimized_filename
             
@@ -707,7 +708,7 @@ class AudioProcessingService:
     def _merge_audio_with_video(self, video_path: str, audio_path: str) -> str:
         """将处理后的音频合并到视频"""
         try:
-            output_dir = Path("output_data")
+            output_dir = OUTPUT_DIR
             video_filename = f"enhanced_{Path(video_path).stem}.mp4"
             output_video_path = output_dir / video_filename
             

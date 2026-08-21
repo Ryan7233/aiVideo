@@ -49,8 +49,8 @@ pip install -r requirements.txt
 # 创建必要的目录
 echo "📁 Creating project directories..."
 mkdir -p logs
-mkdir -p output_data
-mkdir -p input_data
+mkdir -p output_data/uploads
+mkdir -p input_data/downloads input_data/uploads
 mkdir -p tests
 
 # 设置权限
@@ -85,7 +85,11 @@ LOG_FILE=logs/app.log
 
 # Security
 ALLOWED_VIDEO_EXTENSIONS=.mp4,.avi,.mov,.mkv
-MAX_FILE_SIZE=500MB
+MAX_FILE_SIZE=524288000
+MAX_IMAGE_FILE_SIZE=26214400
+ALLOW_UNSAFE_LOCAL_PATHS=false
+CORS_ALLOWED_ORIGINS=http://127.0.0.1:8000,http://localhost:8000
+# AIVIDEO_API_KEY=replace-with-a-strong-random-value
 EOF
     echo "✅ Created .env file"
 else

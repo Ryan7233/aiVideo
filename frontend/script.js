@@ -59,13 +59,6 @@ const elements = {
     shareVideo: document.getElementById('share-video'),
 };
 
-// Initialize App
-document.addEventListener('DOMContentLoaded', function() {
-    initializeEventListeners();
-    initializeUploadArea();
-    updateNavigationFromURL();
-});
-
 // Event Listeners
 function initializeEventListeners() {
     // Navigation
@@ -388,11 +381,13 @@ async function startProcessing() {
                 audio_weight: 0.3,
                 include_intro: elements.enableIntro.checked,
                 include_highlights: true,
-                include_conclusion: elements.enableConclusion.checked
+                include_conclusion: elements.enableConclusion.checked,
+                enable_content_analysis: elements.enableContentAnalysis.checked,
+                asr_model_size: 'base'
             };
         } else {
             // File upload method
-            const fileInput = document.getElementById('video-file');
+            const fileInput = elements.videoUpload;
             if (!fileInput.files || fileInput.files.length === 0) {
                 showToast('请选择视频文件', 'error');
                 return;
@@ -430,7 +425,9 @@ async function startProcessing() {
                     audio_weight: 0.3,
                     include_intro: elements.enableIntro.checked,
                     include_highlights: true,
-                    include_conclusion: elements.enableConclusion.checked
+                    include_conclusion: elements.enableConclusion.checked,
+                    enable_content_analysis: elements.enableContentAnalysis.checked,
+                    asr_model_size: 'base'
                 };
                 
                 showToast('视频上传成功！', 'success');
@@ -442,7 +439,7 @@ async function startProcessing() {
         }
         
         // Start processing
-        updateProcessingStatus('正在分析内容...', 25);
+        updateProcessingStatus('正在执行语音识别、智能选段并生成视频...', 35);
         updateProcessingStep('analyze');
         
         const response = await fetch(`${API_BASE_URL}/video/multi_segment_clipping`, {
@@ -454,27 +451,17 @@ async function startProcessing() {
         });
         
         const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || result.message || `请求失败 (${response.status})`);
+        }
         
         if (result.status === 'success') {
-            updateProcessingStatus('正在选择片段...', 60);
             updateProcessingStep('select');
-            
-            // Simulate some processing time
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            
-            updateProcessingStatus('正在生成视频...', 90);
             updateProcessingStep('generate');
-            
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            
             updateProcessingStatus('处理完成！', 100);
             processingResult = result;
-            
-            // Go to results step
-            setTimeout(() => {
-                goToStep(4);
-                displayResults(result);
-            }, 1000);
+            goToStep(4);
+            displayResults(result);
             
             showToast('视频剪辑完成！', 'success');
         } else {
@@ -614,6 +601,12 @@ function showToast(message, type = 'info') {
     });
 }
 
+function escapeHTML(value) {
+    const element = document.createElement('div');
+    element.textContent = String(value ?? '');
+    return element.innerHTML;
+}
+
 // Pro Features Functions
 function initializeProFeatures() {
     // Photo upload for advanced ranking
@@ -654,30 +647,46 @@ function handlePhotoUpload(event) {
 }
 
 async function processPhotoRanking() {
-    const files = document.getElementById('photo-upload').files;
-    if (files.length === 0) {
-        showToast('请先选择照片', 'error');
+    const uploaded = window.uploadedPhotos || [];
+    if (uploaded.length === 0) {
+        showToast('请先选择照片并等待上传完成', 'error');
         return;
     }
 
     showToast('正在处理照片排序...', 'info');
 
     try {
-        // Mock API call - replace with actual API
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
+        const criteria = document.getElementById('ranking-criteria')?.value || 'combined';
+        const response = await fetch('/pro/photo_rank_advanced', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                photos: uploaded.map(file => file.saved_path),
+                top_k: uploaded.length,
+                context: { criteria }
+            })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || '照片排序失败');
+
+        const container = document.getElementById('photo-upload-area');
+        let output = document.getElementById('photo-ranking-output');
+        if (!output) {
+            output = document.createElement('div');
+            output.id = 'photo-ranking-output';
+            output.className = 'upload-results';
+            container.appendChild(output);
+        }
+        output.replaceChildren();
+        const title = document.createElement('h4');
+        title.textContent = `排序结果（${result.ranked_photos.length} 张）`;
+        output.appendChild(title);
+        result.ranked_photos.forEach((photo, index) => {
+            const row = document.createElement('p');
+            row.textContent = `${index + 1}. ${photo.path || photo.filename || '照片'} · ${Number(photo.final_score || photo.score || 0).toFixed(3)}`;
+            output.appendChild(row);
+        });
         showToast('照片排序完成！', 'success');
-        
-        // Mock result display
-        const result = {
-            ranked_photos: Array.from(files).map((file, index) => ({
-                filename: file.name,
-                score: (Math.random() * 0.5 + 0.5).toFixed(2),
-                rank: index + 1
-            }))
-        };
-        
-        console.log('Photo ranking result:', result);
         
     } catch (error) {
         showToast('照片处理失败: ' + error.message, 'error');
@@ -696,21 +705,26 @@ async function generatePersonalizedContent() {
     showToast('正在生成个性化内容...', 'info');
 
     try {
-        // Mock content generation
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        
-        const mockContent = {
-            title: `${topic} - 必看攻略！`,
-            description: `分享我的${topic}经验，超实用干货来啦！`,
-            hashtags: `#${topic} #分享 #攻略`,
-            complete: `今天给大家分享${topic}的超全攻略！\n\n作为一个资深爱好者，我总结了这些实用技巧：\n\n1. 准备工作很重要\n2. 注意细节\n3. 享受过程\n\n希望对大家有帮助！❤️`
-        };
+        const response = await fetch('/llm/generate_pro_content', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                topic,
+                content_type: type,
+                style: 'professional',
+                target_audience: 'general'
+            })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || '内容生成失败');
+        const data = result.data || {};
+        const content = typeof data === 'string' ? data : (data[type] || data.content || JSON.stringify(data, null, 2));
 
         const contentResult = document.getElementById('content-result');
         const generatedContent = document.getElementById('generated-content');
         
         if (contentResult && generatedContent) {
-            contentResult.textContent = mockContent[type] || mockContent.complete;
+            contentResult.textContent = content;
             generatedContent.style.display = 'block';
         }
         
@@ -965,7 +979,7 @@ ${highlights.map((item, index) => `${index + 1}️⃣ ${item}`).join('\n')}
         await generateSmartCover();
         
         goToXHSStep(3);
-        showToast('小红书内容生成完成！', 'success');
+        showToast('本地模板文案与视觉素材生成完成，可继续调用 AI 改写', 'success');
         
     } catch (error) {
         showToast('内容生成失败: ' + error.message, 'error');
@@ -1550,10 +1564,10 @@ async function decorateImages() {
     showToast('正在装饰图片...', 'info');
 
     try {
-        // 模拟API调用
+        // The selected batch is not rewritten yet; only the cover is regenerated.
         await new Promise(resolve => setTimeout(resolve, 1500));
         
-        showToast(`已为${xhsSelectedPhotos.length}张图片添加装饰效果`, 'success');
+        showToast('当前仅重新生成封面，未改写原始图片文件', 'warning');
         
         // 重新生成封面以显示装饰效果
         await generateSmartCover();
@@ -1617,62 +1631,8 @@ async function publishToXiaohongshu() {
         return;
     }
 
-    // 检查是否已授权
-    const isAuthorized = localStorage.getItem('xhs_authorized');
-    if (!isAuthorized) {
-        // 模拟授权流程
-        const confirmAuth = confirm('需要授权才能发布到小红书，是否现在授权？');
-        if (!confirmAuth) return;
-        
-        showToast('正在跳转到小红书授权页面...', 'info');
-        // 实际实现中，这里会打开小红书授权页面
-        setTimeout(() => {
-            localStorage.setItem('xhs_authorized', 'true');
-            showToast('授权成功！', 'success');
-            publishToXiaohongshu(); // 重新调用发布
-        }, 2000);
-        return;
-    }
-
-    showToast('正在发布到小红书...', 'info');
-
-    try {
-        // 模拟发布API调用
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        
-        // 模拟发布结果
-        const mockResult = {
-            note_id: `note_${Date.now()}`,
-            url: `https://www.xiaohongshu.com/explore/note_${Date.now()}`,
-            status: 'published'
-        };
-        
-        showToast('发布成功！', 'success');
-        
-        // 显示发布结果
-        const resultHtml = `
-            <div style="margin-top: 1rem; padding: 1rem; background: #f0f9ff; border-radius: 8px; border-left: 4px solid #0ea5e9;">
-                <h4 style="color: #0c4a6e; margin-bottom: 0.5rem;">📱 发布成功</h4>
-                <p style="margin: 0.25rem 0; color: #075985;">笔记ID: ${mockResult.note_id}</p>
-                <p style="margin: 0.25rem 0;">
-                    <a href="${mockResult.url}" target="_blank" style="color: #0ea5e9; text-decoration: none;">
-                        🔗 查看发布的笔记
-                    </a>
-                </p>
-                <p style="margin: 0.25rem 0; color: #64748b; font-size: 0.875rem;">
-                    发布时间: ${new Date().toLocaleString()}
-                </p>
-            </div>
-        `;
-        
-        const resultContent = document.getElementById('xhs-result-content');
-        if (resultContent) {
-            resultContent.innerHTML += resultHtml;
-        }
-        
-    } catch (error) {
-        showToast('发布失败: ' + error.message, 'error');
-    }
+    showToast('当前未接入小红书官方发布接口，请下载成品后手动发布', 'warning');
+    previewBeforePublish();
 }
 
 // 预览发布效果功能
@@ -1792,11 +1752,11 @@ async function handleProPhotoUpload(files) {
                     ${result.files.map((file, index) => `
                         <div class="uploaded-photo">
                             <img src="${file.url}" alt="Photo ${index + 1}" style="width: 80px; height: 80px; object-fit: cover; border-radius: 4px;">
-                            <p>${file.original_name}</p>
+                            <p>${escapeHTML(file.original_name)}</p>
                         </div>
                     `).join('')}
                 </div>
-                <button class="btn-primary" onclick="processPhotosRanking('${JSON.stringify(result.files).replace(/"/g, '&quot;')}')">
+                <button class="btn-primary" onclick="processPhotoRanking()">
                     <i class="fas fa-magic"></i> 开始智能排序
                 </button>
             `;
@@ -1840,11 +1800,9 @@ async function generateSmartContent() {
         return;
     }
 
-    showToast('正在智能生成个性化文案...', 'info');
+    showToast('正在生成本地个性化模板...', 'info');
 
     try {
-        await new Promise(resolve => setTimeout(resolve, 1500));
-
         // 根据用户输入生成个性化内容
         const photoCount = xhsSelectedPhotos.length;
         let contentStyle = '';
@@ -1971,7 +1929,7 @@ ${userFeeling}！从${finalHighlights[0] || '开始'}到${finalHighlights[1] || 
             updateContentStats();
         }
 
-        showToast('个性化文案生成完成！', 'success');
+        showToast('本地模板文案生成完成（未调用 AI）', 'success');
 
     } catch (error) {
         showToast('文案生成失败: ' + error.message, 'error');
@@ -2293,8 +2251,8 @@ function displayHistory() {
                 ${getHistoryIcon(item.type)}
             </div>
             <div class="history-content">
-                <div class="history-title">${item.title}</div>
-                <div class="history-desc">${item.description}</div>
+                <div class="history-title">${escapeHTML(item.title)}</div>
+                <div class="history-desc">${escapeHTML(item.description)}</div>
             </div>
             <div class="history-meta">
                 <div class="history-time">${formatTime(item.timestamp)}</div>
@@ -2422,10 +2380,10 @@ function viewHistoryItem(itemId) {
             </div>
             <div class="modal-body">
                 <div style="margin-bottom: 1rem;">
-                    <strong>标题：</strong>${item.title}
+                    <strong>标题：</strong>${escapeHTML(item.title)}
                 </div>
                 <div style="margin-bottom: 1rem;">
-                    <strong>描述：</strong>${item.description}
+                    <strong>描述：</strong>${escapeHTML(item.description)}
                 </div>
                 <div style="margin-bottom: 1rem;">
                     <strong>时间：</strong>${new Date(item.timestamp).toLocaleString()}

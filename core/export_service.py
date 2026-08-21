@@ -9,6 +9,7 @@ import zipfile
 import shutil
 from typing import List, Dict, Optional
 from pathlib import Path
+from core.runtime import OUTPUT_DIR
 from datetime import datetime
 import hashlib
 import uuid
@@ -20,7 +21,7 @@ class ExportService:
     """导出服务"""
     
     def __init__(self):
-        self.export_base_path = Path("output_data/exports")
+        self.export_base_path = OUTPUT_DIR / "exports"
         self.export_base_path.mkdir(parents=True, exist_ok=True)
         
         # 支持的导出格式

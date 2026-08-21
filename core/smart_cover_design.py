@@ -8,6 +8,7 @@ import numpy as np
 import logging
 from typing import List, Dict, Tuple, Optional
 from pathlib import Path
+from core.runtime import OUTPUT_DIR
 import json
 import colorsys
 from collections import Counter
@@ -227,7 +228,7 @@ class SmartCoverDesigner:
     def _extract_frame_at_time(self, video_path: str, timestamp: float, index: int) -> Optional[str]:
         """在指定时间提取视频帧"""
         try:
-            output_dir = Path("output_data/cover_frames")
+            output_dir = OUTPUT_DIR / "cover_frames"
             output_dir.mkdir(parents=True, exist_ok=True)
             
             frame_filename = f"frame_{Path(video_path).stem}_{index:02d}.jpg"
@@ -1030,7 +1031,7 @@ class SmartCoverDesigner:
     def _save_cover_image(self, image: Image.Image, frame_info: Dict) -> str:
         """保存封面图像"""
         try:
-            output_dir = Path("output_data/covers")
+            output_dir = OUTPUT_DIR / "covers"
             output_dir.mkdir(parents=True, exist_ok=True)
             
             timestamp = int(datetime.now().timestamp())

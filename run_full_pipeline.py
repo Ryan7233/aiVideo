@@ -14,6 +14,7 @@ load_dotenv()
 from core.config import (
     GEMINI_API_BASE, CUT_API_BASE, MIN_CLIP_DURATION, MAX_CLIP_DURATION
 )
+from core.runtime import LOG_DIR, ensure_runtime_directories
 
 # Configuration
 SRC_VIDEO = os.getenv("SRC_VIDEO", "sample.mp4")
@@ -22,7 +23,8 @@ RESULTS_JSON = os.getenv("RESULTS_JSON", "results.json")
 API_TIMEOUT = int(os.getenv("API_TIMEOUT", 300))
 
 # Setup logging
-logger.add("logs/pipeline.log", rotation="10 MB", level="INFO")
+ensure_runtime_directories()
+logger.add(str(LOG_DIR / "pipeline.log"), rotation="10 MB", level="INFO")
 
 class PipelineError(Exception):
     """Custom exception for pipeline errors"""
@@ -235,8 +237,7 @@ class VideoClipperPipeline:
 
 def main():
     """主函数"""
-    # Create logs directory
-    Path("logs").mkdir(exist_ok=True)
+    ensure_runtime_directories()
     
     try:
         # Initialize and run pipeline

@@ -7,6 +7,7 @@ import re
 import logging
 from typing import List, Dict, Tuple, Optional
 from pathlib import Path
+from core.runtime import OUTPUT_DIR
 from datetime import timedelta
 import random
 
@@ -276,8 +277,7 @@ class SubtitleGenerator:
                 srt_content.append("")  # 空行
             
             # 保存文件
-            srt_filename = f"output_data/subtitles_clip_{clip_idx:02d}.srt"
-            Path("output_data").mkdir(parents=True, exist_ok=True)
+            srt_filename = str(OUTPUT_DIR / f"subtitles_clip_{clip_idx:02d}.srt")
             
             with open(srt_filename, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(srt_content))
@@ -339,7 +339,7 @@ class SubtitleGenerator:
                 ass_content.append(f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{text}")
             
             # 保存文件
-            ass_filename = f"output_data/subtitles_clip_{clip_idx:02d}.ass"
+            ass_filename = str(OUTPUT_DIR / f"subtitles_clip_{clip_idx:02d}.ass")
             
             with open(ass_filename, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(ass_content))

@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Union
 import subprocess
+from core.runtime import MODEL_DIR, OUTPUT_DIR
 
 try:
     from faster_whisper import WhisperModel
@@ -80,7 +81,7 @@ class WhisperASRService:
                 self.model_size,
                 device=self.device,
                 compute_type=self.compute_type,
-                download_root="models/whisper"  # 模型缓存目录
+                download_root=str(MODEL_DIR / "whisper")
             )
             
             load_time = time.time() - start_time
@@ -461,20 +462,20 @@ class WhisperASRService:
             logger.info("🧹 Whisper模型资源已清理")
 
 
-# 全局ASR服务实例
-asr_service = None
+# Cache one service per model/device pair so a previous request cannot silently
+# force later requests to use the wrong Whisper model.
+asr_services: Dict[Tuple[str, str], WhisperASRService] = {}
 
 def get_asr_service(model_size: str = "base", device: str = "auto") -> WhisperASRService:
-    """获取全局ASR服务实例"""
-    global asr_service
-    
-    if asr_service is None:
-        asr_service = WhisperASRService(model_size=model_size, device=device)
-    
-    return asr_service
+    """Get a cached ASR service for the requested model and device."""
+    key = (model_size, device)
+    if key not in asr_services:
+        asr_services[key] = WhisperASRService(model_size=model_size, device=device)
+    return asr_services[key]
 
 def transcribe_video_file(video_path: str, language: str = None, 
-                         subtitle_format: str = "srt", **kwargs) -> Dict:
+                         subtitle_format: str = "srt", model_size: str = "base",
+                         device: str = "auto", **kwargs) -> Dict:
     """
     便捷函数：转录视频文件并生成字幕
     
@@ -487,7 +488,7 @@ def transcribe_video_file(video_path: str, language: str = None,
     Returns:
         包含转录结果和字幕文件路径的字典
     """
-    service = get_asr_service()
+    service = get_asr_service(model_size=model_size, device=device)
     
     # 转录视频
     result = service.transcribe_video(video_path, language=language, **kwargs)
@@ -495,7 +496,7 @@ def transcribe_video_file(video_path: str, language: str = None,
     # 生成字幕文件
     if subtitle_format and subtitle_format != "none":
         video_stem = Path(video_path).stem
-        subtitle_path = f"output_data/{video_stem}_subtitles.{subtitle_format}"
+        subtitle_path = str(OUTPUT_DIR / f"{video_stem}_subtitles.{subtitle_format}")
         
         subtitle_file = service.generate_subtitles(
             result, 

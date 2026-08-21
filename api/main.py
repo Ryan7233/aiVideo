@@ -2,17 +2,19 @@ import json
 import os
 import subprocess
 import time
+import asyncio
+import hmac
 from pathlib import Path
 from datetime import datetime
-from urllib.request import urlretrieve
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
+import aiofiles
 from fastapi import FastAPI, Request, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 import uuid
@@ -22,6 +24,20 @@ from core.config import (
     SEGMENT_PROMPT, CAPTIONS_PROMPT, GEMINI_API_BASE, CUT_API_BASE,
     UPLOAD_BUCKET, UPLOAD_BASE_URL, VIDEO_FPS, VIDEO_CRF, AUDIO_BITRATE,
     validate_video_extension, validate_file_size, MIN_CLIP_DURATION, MAX_CLIP_DURATION
+)
+from core.runtime import (
+    DOWNLOAD_DIR,
+    INPUT_DIR,
+    LOG_DIR,
+    OUTPUT_DIR,
+    PHOTO_UPLOAD_DIR,
+    PROJECT_ROOT,
+    VIDEO_UPLOAD_DIR,
+    download_public_file,
+    ensure_runtime_directories,
+    resolve_media_path,
+    resolve_output_path,
+    validate_remote_url,
 )
 from core.settings import settings
 from core.smart_clipping import get_smart_segments, analyze_video_intelligence
@@ -44,11 +60,13 @@ from core.smart_cover_generator import get_smart_cover_generator
 from core.llm_service import get_llm_service
 from core.advanced_collage_generator import get_advanced_collage_generator
 from core.xiaohongshu_collage_generator import get_xiaohongshu_collage_generator, CollageConfig, TextConfig
+from core.video_workflow import process_multi_segment_video
 from routers.tasks import router as tasks_router
 
-# Setup logging
-logger.add("logs/api.log", rotation="10 MB", level="INFO")
-logger.add("logs/api.jsonl", rotation="10 MB", level="INFO", serialize=True)
+# Setup runtime and logging before mounting static directories.
+ensure_runtime_directories()
+logger.add(str(LOG_DIR / "api.log"), rotation="10 MB", level="INFO")
+logger.add(str(LOG_DIR / "api.jsonl"), rotation="10 MB", level="INFO", serialize=True)
 
 app = FastAPI(
     title="AI Video Clipper API",
@@ -57,9 +75,16 @@ app = FastAPI(
 )
 
 # Add CORS middleware
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS", "http://127.0.0.1:8000,http://localhost:8000"
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -76,29 +101,49 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(RequestIDMiddleware)
 
+
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    """Optionally protect API routes when AIVIDEO_API_KEY is configured."""
+
+    async def dispatch(self, request, call_next):
+        configured_key = os.getenv("AIVIDEO_API_KEY", "")
+        public_prefixes = ("/static", "/docs", "/openapi.json", "/redoc")
+        if configured_key and request.url.path not in {"/", "/health", "/info"}:
+            if not request.url.path.startswith(public_prefixes):
+                supplied_key = request.headers.get("X-API-Key", "")
+                if not hmac.compare_digest(supplied_key, configured_key):
+                    return JSONResponse(status_code=401, content={"detail": "无效或缺失的 API Key"})
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        return response
+
+
+app.add_middleware(APIKeyMiddleware)
+
 # Create logs directory if it doesn't exist
-Path("logs").mkdir(exist_ok=True)
+ensure_runtime_directories()
 
 # Routers
 app.include_router(tasks_router)
 
 # Mount static files and frontend
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
-app.mount("/static/uploads", StaticFiles(directory="output_data/uploads"), name="uploads")
-app.mount("/output", StaticFiles(directory="output_data"), name="output")
+app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "frontend")), name="static")
+app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
 
 @app.get("/")
 async def serve_frontend():
     """Serve the main frontend page"""
-    return FileResponse("frontend/index.html")
+    return FileResponse(str(PROJECT_ROOT / "frontend" / "index.html"))
 
 # Exception handler for validation errors
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    logger.error(f"Validation error: {exc.errors()}")
+    errors = [{key: value for key, value in item.items() if key != "ctx"} for item in exc.errors()]
+    logger.error(f"Validation error: {errors}")
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors(), "message": "请求参数验证失败"},
+        content={"detail": errors, "message": "请求参数验证失败"},
     )
 
 # --- Pydantic Models with Validation ---
@@ -142,11 +187,10 @@ class CutReq(BaseModel):
     @field_validator('src')
     @classmethod
     def validate_src_file(cls, v):
-        if not os.path.exists(v):
-            raise ValueError(f'源文件不存在: {v}')
-        if not validate_video_extension(v):
+        path = resolve_media_path(v)
+        if not validate_video_extension(str(path)):
             raise ValueError(f'不支持的视频格式: {v}')
-        return v
+        return str(path)
     
     @field_validator('start', 'end')
     @classmethod
@@ -164,16 +208,15 @@ class BurnSubReq(BaseModel):
     @field_validator('src')
     @classmethod
     def validate_src_file(cls, v):
-        if not os.path.exists(v):
-            raise ValueError(f'源文件不存在: {v}')
-        return v
+        return str(resolve_media_path(v))
     
     @field_validator('srt')
     @classmethod
     def validate_srt_file(cls, v):
-        if not os.path.exists(v):
-            raise ValueError(f'字幕文件不存在: {v}')
-        return v
+        path = resolve_media_path(v)
+        if path.suffix.lower() not in {'.srt', '.ass', '.vtt'}:
+            raise ValueError('字幕文件格式必须是 srt/ass/vtt')
+        return str(path)
 
 class UploadReq(BaseModel):
     path: str
@@ -182,9 +225,7 @@ class UploadReq(BaseModel):
     @field_validator('path')
     @classmethod
     def validate_path(cls, v):
-        if not os.path.exists(v):
-            raise ValueError(f'文件不存在: {v}')
-        return v
+        return str(resolve_media_path(v))
 
 # --- Utility Functions ---
 def normalize_time(time_str: str) -> str:
@@ -450,10 +491,21 @@ def run_gemini(prompt: str, max_retries: int = 3) -> str:
                 raise HTTPException(status_code=500, detail="AI服务调用失败")
             time.sleep(1)  # Wait before retry
 
+
+async def materialize_video_source(url: str, prefix: str) -> str:
+    """Resolve a managed local video or securely download a public remote one."""
+    if url.startswith("file://"):
+        return str(resolve_media_path(url))
+
+    validated_url = validate_remote_url(url)
+    destination = DOWNLOAD_DIR / f"{prefix}_{uuid.uuid4().hex}.mp4"
+    await asyncio.to_thread(download_public_file, validated_url, destination, MAX_FILE_SIZE)
+    return str(destination)
+
 # --- API Endpoints ---
-@app.get("/")
+@app.get("/info")
 async def root():
-    """Health check endpoint"""
+    """Basic service information."""
     return {"message": "AI Video Clipper API is running", "version": "1.0.0"}
 
 @app.get("/health")
@@ -462,6 +514,7 @@ async def health_check():
     return {
         "status": "healthy", 
         "timestamp": int(time.time()),
+        "version": "1.0.0",
         "services": {
             "api": "running",
             "smart_clipping": "available"
@@ -484,6 +537,8 @@ async def segment(req: SegmentReq):
         
         result = run_gemini(prompt)
         parsed_result = json.loads(result[result.find("{"):result.rfind("}")+1])
+        parsed_result["mode"] = "simulation"
+        parsed_result["message"] = "本接口当前使用固定演示结果；正式选段请调用 /video/multi_segment_clipping"
         
         logger.info(f"Generated {len(parsed_result.get('clips', []))} clips")
         return parsed_result
@@ -509,6 +564,8 @@ async def captions(req: CaptionsReq):
         
         result = run_gemini(prompt)
         parsed_result = json.loads(result[result.find("{"):result.rfind("}")+1])
+        parsed_result["mode"] = "simulation"
+        parsed_result["message"] = "本接口当前使用固定演示结果；正式文案请调用 /llm/generate_content"
         
         logger.info(f"Generated captions: {parsed_result.get('title', '')}")
         return parsed_result
@@ -529,14 +586,15 @@ async def cut916(req: CutReq):
         # Normalize time format
         start_time = normalize_time(req.start)
         end_time = normalize_time(req.end)
+        output_path = resolve_output_path(req.out, f"clip_{uuid.uuid4().hex}.mp4")
         
         # Robust 9:16 pipeline using expressions (no FOAR option):
         # - If input is wider than 9:16, scale height to 1920 and width proportional; else scale width to 1080
         # - Then center crop to exactly 1080x1920; set pixel format and SAR for compatibility
         vf_filters = (
-            "scale="
-            "if(gte(iw/ih\,1080/1920)\,-2\,1080):"
-            "if(gte(iw/ih\,1080/1920)\,1920\,-2),"
+            r"scale="
+            r"if(gte(iw/ih\,1080/1920)\,-2\,1080):"
+            r"if(gte(iw/ih\,1080/1920)\,1920\,-2),"
             "crop=1080:1920,format=yuv420p,setsar=1:1"
         )
 
@@ -558,20 +616,22 @@ async def cut916(req: CutReq):
             "-c:a", "aac",
             "-b:a", AUDIO_BITRATE,
             "-movflags", "+faststart",
-            req.out
+            str(output_path)
         ]
         
         result = safe_run_ffmpeg(cmd)
-        result["out"] = req.out
+        result["out"] = str(output_path)
         
-        logger.info(f"Successfully created 9:16 video: {req.out}")
+        logger.info(f"Successfully created 9:16 video: {output_path}")
         return result
         
     except Exception as e:
         logger.error(f"9:16 video cut error: {str(e)}")
         # Clean up partial output file if it exists
-        if os.path.exists(req.out):
-            os.remove(req.out)
+        try:
+            resolve_output_path(req.out, "failed.mp4").unlink(missing_ok=True)
+        except ValueError:
+            pass
         raise HTTPException(status_code=500, detail=f"9:16视频生成失败: {str(e)}")
 
 @app.post("/burnsub")
@@ -580,25 +640,28 @@ async def burnsub(req: BurnSubReq):
     try:
         logger.info(f"Burning subtitles: {req.srt} -> {req.src}")
         
+        output_path = resolve_output_path(req.out, f"subtitled_{uuid.uuid4().hex}.mp4")
         cmd = [
             "ffmpeg", "-y",
             "-i", req.src,
             "-vf", f"subtitles={req.srt}:force_style='Fontsize=28'",
             "-c:a", "copy",
-            req.out
+            str(output_path)
         ]
         
         result = safe_run_ffmpeg(cmd)
-        result["out"] = req.out
+        result["out"] = str(output_path)
         
-        logger.info(f"Successfully burned subtitles: {req.out}")
+        logger.info(f"Successfully burned subtitles: {output_path}")
         return result
         
     except Exception as e:
         logger.error(f"Subtitle burning error: {str(e)}")
         # Clean up partial output file if it exists
-        if os.path.exists(req.out):
-            os.remove(req.out)
+        try:
+            resolve_output_path(req.out, "failed.mp4").unlink(missing_ok=True)
+        except ValueError:
+            pass
         raise HTTPException(status_code=500, detail=f"字幕烧录失败: {str(e)}")
 
 @app.post("/upload")
@@ -620,10 +683,13 @@ async def upload(req: UploadReq):
         logger.info(f"Mock upload: {req.path} -> {mock_url}")
         
         return {
+            "status": "simulation",
+            "uploaded": False,
             "url": mock_url,
             "key": file_name,
             "size": file_size,
-            "bucket": req.bucket
+            "bucket": req.bucket,
+            "message": "模拟云存储地址：文件未上传到外部存储"
         }
         
     except Exception as e:
@@ -640,6 +706,11 @@ class URLIntroReq(BaseModel):
     top_k: int = 3
     output: str = str(Path("output_data") / "intro_916.mp4")
     smart_mode: bool = True  # 启用智能选段模式
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value):
+        return validate_remote_url(value)
 
 class VideoAnalysisReq(BaseModel):
     url: str
@@ -771,7 +842,7 @@ class PhotoRankingReq(BaseModel):
     def validate_photos(cls, v):
         if not v:
             raise ValueError('照片列表不能为空')
-        return v
+        return [str(resolve_media_path(path)) for path in v]
     
     @field_validator('top_k')
     @classmethod
@@ -861,6 +932,11 @@ class XHSPipelineReq(BaseModel):
             raise ValueError('视频URL不能为空')
         return v.strip()
 
+    @field_validator("photos")
+    @classmethod
+    def validate_photos(cls, value):
+        return [str(resolve_media_path(path)) for path in value]
+
 # Pro功能API模型
 class AdvancedPhotoRankingReq(BaseModel):
     photos: List[str]
@@ -874,7 +950,7 @@ class AdvancedPhotoRankingReq(BaseModel):
     def validate_photos(cls, v):
         if not v:
             raise ValueError('照片列表不能为空')
-        return v
+        return [str(resolve_media_path(path)) for path in v]
 
 class SemanticHighlightsReq(BaseModel):
     transcript_segments: List[Dict]
@@ -956,6 +1032,25 @@ class XHSProPipelineReq(BaseModel):
     style: str = "治愈"
     user_id: Optional[str] = None
     model_size: str = "base"
+    export_format: str = "zip"
+    use_advanced_photo_ranking: bool = True
+    use_semantic_highlights: bool = True
+    use_personalized_writing: bool = False
+    use_smart_cover: bool = True
+    use_audio_enhancement: bool = True
+
+    @field_validator("video_url")
+    @classmethod
+    def validate_video_url(cls, value):
+        if value.startswith("file://"):
+            resolve_media_path(value)
+            return value
+        return validate_remote_url(value)
+
+    @field_validator("photos")
+    @classmethod
+    def validate_photos(cls, value):
+        return [str(resolve_media_path(path)) for path in value]
 
 # 新增API模型
 class XHSPublishReq(BaseModel):
@@ -966,9 +1061,21 @@ class XHSPublishReq(BaseModel):
     location: Optional[str] = None
     privacy: str = "public"
 
+    @field_validator("images")
+    @classmethod
+    def validate_images(cls, value):
+        if not value:
+            raise ValueError("图片列表不能为空")
+        return [str(resolve_media_path(path)) for path in value]
+
 class ImageDecorateReq(BaseModel):
     image_path: str
     decorations: Dict[str, Any]
+
+    @field_validator("image_path")
+    @classmethod
+    def validate_image_path(cls, value):
+        return str(resolve_media_path(value))
 
 class SmartCoverReq(BaseModel):
     images: List[str]
@@ -978,14 +1085,13 @@ class SmartCoverReq(BaseModel):
     theme: str = "pink_gradient"
     platform: str = "xiaohongshu"
     custom_config: Optional[Dict[str, Any]] = None
-    export_format: str = "zip"
-    
-    # Pro功能开关
-    use_advanced_photo_ranking: bool = True
-    use_semantic_highlights: bool = True
-    use_personalized_writing: bool = False
-    use_smart_cover: bool = True
-    use_audio_enhancement: bool = True
+
+    @field_validator("images")
+    @classmethod
+    def validate_images(cls, value):
+        if not value:
+            raise ValueError("图片列表不能为空")
+        return [str(resolve_media_path(path)) for path in value]
 
 class LLMContentReq(BaseModel):
     theme: str
@@ -1015,6 +1121,13 @@ class AdvancedCollageReq(BaseModel):
     extra_text: Optional[str] = ""
     text_position: str = "bottom"  # bottom | center
 
+    @field_validator("images")
+    @classmethod
+    def validate_images(cls, value):
+        if not value:
+            raise ValueError("图片列表不能为空")
+        return [str(resolve_media_path(path)) for path in value]
+
 class XiaohongshuCollageReq(BaseModel):
     images: List[str]
     title: str
@@ -1030,6 +1143,13 @@ class XiaohongshuCollageReq(BaseModel):
     font_path: Optional[str] = None
     overlay_texts: List[Dict[str, Any]] = []  # 额外文案块，锚点定位
 
+    @field_validator("images")
+    @classmethod
+    def validate_images(cls, value):
+        if not value:
+            raise ValueError("图片列表不能为空")
+        return [str(resolve_media_path(path)) for path in value]
+
 class EditableTextReq(BaseModel):
     collage_id: str
     text_id: str
@@ -1043,29 +1163,14 @@ class EditableTextReq(BaseModel):
 async def analyze_video(req: VideoAnalysisReq):
     """分析视频内容，返回智能化分析结果"""
     try:
-        Path("input_data/downloads").mkdir(parents=True, exist_ok=True)
-        
-        # 下载视频
-        ts = int(time.time())
-        dl_path = str(Path("input_data/downloads") / f"analysis_{ts}.mp4")
-        
-        if req.url.startswith("file:"):
-            # 本地文件
-            local_path = req.url.replace("file://", "")
-            if not Path(local_path).exists():
-                raise HTTPException(status_code=400, detail="本地文件不存在")
-            dl_path = local_path
-        else:
-            # URL下载 (简化版，实际项目中可能需要更复杂的下载逻辑)
-            from urllib.request import urlretrieve
-            urlretrieve(req.url, dl_path)
+        dl_path = await materialize_video_source(req.url, "analysis")
         
         # 执行智能分析
         logger.info(f"Starting intelligent video analysis for: {dl_path}")
-        analysis_result = analyze_video_intelligence(dl_path)
+        analysis_result = await asyncio.to_thread(analyze_video_intelligence, dl_path)
         
         # 获取智能片段推荐
-        smart_segments = get_smart_segments(dl_path, 15, 30, count=5)
+        smart_segments = await asyncio.to_thread(get_smart_segments, dl_path, 15, 30, 5)
         
         return {
             "status": "success",
@@ -1086,22 +1191,8 @@ async def analyze_video(req: VideoAnalysisReq):
 async def asr_transcribe(req: ASRTranscribeReq):
     """自动语音识别 - 转录视频/音频"""
     try:
-        Path("input_data/downloads").mkdir(parents=True, exist_ok=True)
-        Path("output_data").mkdir(parents=True, exist_ok=True)
-        
-        # 处理输入文件
         ts = int(time.time())
-        if req.url.startswith("file:"):
-            # 本地文件
-            local_path = req.url.replace("file://", "")
-            if not Path(local_path).exists():
-                raise HTTPException(status_code=400, detail="本地文件不存在")
-            input_path = local_path
-        else:
-            # URL下载
-            input_path = str(Path("input_data/downloads") / f"asr_input_{ts}.mp4")
-            from urllib.request import urlretrieve
-            urlretrieve(req.url, input_path)
+        input_path = await materialize_video_source(req.url, "asr_input")
         
         logger.info(f"🎤 开始ASR转录: {input_path}")
         
@@ -1109,18 +1200,19 @@ async def asr_transcribe(req: ASRTranscribeReq):
         asr_service = get_asr_service(model_size=req.model_size)
         
         # 转录视频
-        result = asr_service.transcribe_video(
+        result = await asyncio.to_thread(
+            asr_service.transcribe_video,
             input_path,
-            language=req.language,
+            req.language,
+            True,
             task=req.task,
-            cleanup_audio=True
         )
         
         # 生成字幕文件
         subtitle_file = None
         if req.subtitle_format != "none":
             video_stem = Path(input_path).stem
-            subtitle_path = f"output_data/{video_stem}_asr_{ts}.{req.subtitle_format}"
+            subtitle_path = str(OUTPUT_DIR / f"{video_stem}_asr_{ts}.{req.subtitle_format}")
             
             subtitle_file = asr_service.generate_subtitles(
                 result,
@@ -1155,20 +1247,7 @@ async def asr_transcribe(req: ASRTranscribeReq):
 async def extract_audio(req: AudioExtractionReq):
     """从视频中提取音频"""
     try:
-        Path("output_data").mkdir(parents=True, exist_ok=True)
-        
-        # 处理输入文件
-        if req.url.startswith("file:"):
-            local_path = req.url.replace("file://", "")
-            if not Path(local_path).exists():
-                raise HTTPException(status_code=400, detail="本地文件不存在")
-            input_path = local_path
-        else:
-            # URL下载
-            ts = int(time.time())
-            input_path = str(Path("input_data/downloads") / f"audio_extract_{ts}.mp4")
-            from urllib.request import urlretrieve
-            urlretrieve(req.url, input_path)
+        input_path = await materialize_video_source(req.url, "audio_extract")
         
         logger.info(f"🎵 开始提取音频: {input_path}")
         
@@ -1177,12 +1256,13 @@ async def extract_audio(req: AudioExtractionReq):
         
         # 提取音频
         video_stem = Path(input_path).stem
-        audio_path = f"output_data/{video_stem}_audio_{int(time.time())}.wav"
+        audio_path = str(OUTPUT_DIR / f"{video_stem}_audio_{int(time.time())}.wav")
         
-        extracted_audio = asr_service.extract_audio_from_video(
+        extracted_audio = await asyncio.to_thread(
+            asr_service.extract_audio_from_video,
             input_path,
-            audio_path=audio_path,
-            sample_rate=req.sample_rate
+            audio_path,
+            req.sample_rate,
         )
         
         # 获取音频信息
@@ -1291,41 +1371,31 @@ async def semantic_analyze(req: SemanticAnalysisReq):
 async def asr_enhanced_smart_clipping(req: ASRSmartClippingReq):
     """ASR增强智能切片 - 结合语音识别和语义分析的智能选段"""
     try:
-        Path("input_data/downloads").mkdir(parents=True, exist_ok=True)
-        Path("output_data").mkdir(parents=True, exist_ok=True)
-        
-        # 处理输入文件
         ts = int(time.time())
-        if req.url.startswith("file:"):
-            local_path = req.url.replace("file://", "")
-            if not Path(local_path).exists():
-                raise HTTPException(status_code=400, detail="本地文件不存在")
-            input_path = local_path
-        else:
-            input_path = str(Path("input_data/downloads") / f"asr_smart_{ts}.mp4")
-            from urllib.request import urlretrieve
-            urlretrieve(req.url, input_path)
+        input_path = await materialize_video_source(req.url, "asr_smart")
         
         logger.info(f"🎯 开始ASR增强智能切片: {input_path}")
         
         # 1. 获取ASR转录结果
         asr_service = get_asr_service(model_size=req.model_size)
-        transcription_result = asr_service.transcribe_video(
+        transcription_result = await asyncio.to_thread(
+            asr_service.transcribe_video,
             input_path,
-            language=req.language,
-            cleanup_audio=True
+            req.language,
+            True,
         )
         
         logger.info(f"ASR转录完成 - 语言: {transcription_result['language']}, 文本长度: {transcription_result['word_count']}词")
         
         # 2. 执行ASR增强智能选段
         asr_engine = get_asr_smart_engine()
-        selected_segments = asr_engine.select_best_segments_with_asr(
+        selected_segments = await asyncio.to_thread(
+            asr_engine.select_best_segments_with_asr,
             input_path,
             transcription_result,
             req.min_sec,
             req.max_sec,
-            req.count
+            req.count,
         )
         
         if not selected_segments:
@@ -1336,7 +1406,7 @@ async def asr_enhanced_smart_clipping(req: ASRSmartClippingReq):
         
         for i, segment in enumerate(selected_segments):
             output_filename = f"{req.output_prefix}_{ts}_{i+1:02d}.mp4"
-            output_path = f"output_data/{output_filename}"
+            output_path = str(OUTPUT_DIR / output_filename)
             
             start_time = segment['start_hms']
             duration = segment['duration']
@@ -1362,7 +1432,7 @@ async def asr_enhanced_smart_clipping(req: ASRSmartClippingReq):
                 output_path
             ]
             
-            safe_run_ffmpeg(cmd)
+            await asyncio.to_thread(safe_run_ffmpeg, cmd)
             
             # 获取生成的视频信息
             file_size = Path(output_path).stat().st_size if Path(output_path).exists() else 0
@@ -1415,8 +1485,13 @@ async def advanced_photo_rank(req: AdvancedPhotoRankingReq):
         logger.info(f"开始高级照片选优，共 {len(req.photos)} 张照片")
         
         advanced_service = get_advanced_photo_service()
-        ranked_photos = advanced_service.rank_photos_advanced(
-            req.photos, req.top_k, req.context
+        ranked_photos = await asyncio.to_thread(
+            advanced_service.rank_photos_advanced,
+            req.photos,
+            req.top_k,
+            req.context,
+            req.use_clip,
+            req.use_aesthetic_model,
         )
         
         return {
@@ -1445,7 +1520,7 @@ async def detect_semantic_highlights(req: SemanticHighlightsReq):
         logger.info(f"开始语义高光检测，共 {len(req.transcript_segments)} 个片段")
         
         detector = get_semantic_highlight_detector()
-        highlights = detector.detect_highlights(req.transcript_segments, req.context)
+        highlights = await asyncio.to_thread(detector.detect_highlights, req.transcript_segments, req.context)
         
         # 筛选符合条件的高光
         filtered_highlights = [
@@ -1479,7 +1554,9 @@ async def learn_user_style(req: UserStyleLearningReq):
         logger.info(f"开始学习用户 {req.user_id} 的写作风格")
         
         writing_service = get_personalized_writing_service()
-        user_profile = writing_service.learn_user_style(req.user_id, req.content_samples)
+        user_profile = await asyncio.to_thread(
+            writing_service.learn_user_style, req.user_id, req.content_samples
+        )
         
         return {
             "status": "success",
@@ -1507,8 +1584,11 @@ async def generate_personalized_content(req: PersonalizedWritingReq):
         logger.info(f"开始为用户 {req.user_id} 生成个性化内容")
         
         writing_service = get_personalized_writing_service()
-        personalized_content = writing_service.generate_personalized_content(
-            req.user_id, req.content_data, req.style_override
+        personalized_content = await asyncio.to_thread(
+            writing_service.generate_personalized_content,
+            req.user_id,
+            req.content_data,
+            req.style_override,
         )
         
         return {
@@ -1532,8 +1612,8 @@ async def generate_smart_cover(req: SmartCoverDesignReq):
         logger.info(f"开始智能封面设计 - 标题: {req.title[:20]}...")
         
         cover_designer = get_smart_cover_designer()
-        cover_result = cover_designer.generate_smart_cover(
-            req.clips, req.photos, req.title, req.style
+        cover_result = await asyncio.to_thread(
+            cover_designer.generate_smart_cover, req.clips, req.photos, req.title, req.style
         )
         
         return {
@@ -1560,8 +1640,12 @@ async def process_video_audio(req: AudioProcessingReq):
         logger.info(f"开始音频处理 - 风格: {req.style}")
         
         audio_service = get_audio_processing_service()
-        processing_result = audio_service.process_video_audio(
-            req.video_path, req.style, req.enhance_speech, req.add_bgm
+        processing_result = await asyncio.to_thread(
+            audio_service.process_video_audio,
+            req.video_path,
+            req.style,
+            req.enhance_speech,
+            req.add_bgm,
         )
         
         return {
@@ -1588,7 +1672,7 @@ async def photo_rank(req: PhotoRankingReq):
         logger.info(f"开始照片选优，共 {len(req.photos)} 张照片")
         
         photo_service = get_photo_ranking_service()
-        ranked_photos = photo_service.rank_photos(req.photos, req.top_k)
+        ranked_photos = await asyncio.to_thread(photo_service.rank_photos, req.photos, req.top_k)
         
         return {
             "status": "success",
@@ -1715,22 +1799,12 @@ async def export_content(req: ExportReq):
 async def xiaohongshu_pipeline(req: XHSPipelineReq):
     """小红书一键出稿完整流水线"""
     try:
-        Path("input_data/downloads").mkdir(parents=True, exist_ok=True)
-        Path("output_data").mkdir(parents=True, exist_ok=True)
+        ensure_runtime_directories()
         
         logger.info(f"🎬 开始小红书一键出稿流水线 - 城市: {req.city}, 风格: {req.style}")
         
-        # 处理输入文件
         ts = int(time.time())
-        if req.video_url.startswith("file:"):
-            local_path = req.video_url.replace("file://", "")
-            if not Path(local_path).exists():
-                raise HTTPException(status_code=400, detail="本地文件不存在")
-            input_path = local_path
-        else:
-            input_path = str(Path("input_data/downloads") / f"xhs_pipeline_{ts}.mp4")
-            from urllib.request import urlretrieve
-            urlretrieve(req.video_url, input_path)
+        input_path = await materialize_video_source(req.video_url, "xhs_pipeline")
         
         pipeline_result = {
             'source_video': input_path,
@@ -1891,22 +1965,12 @@ async def xiaohongshu_pipeline(req: XHSPipelineReq):
 async def xiaohongshu_pipeline_pro(req: XHSProPipelineReq):
     """小红书一键出稿Pro版流水线（包含所有高级功能）"""
     try:
-        Path("input_data/downloads").mkdir(parents=True, exist_ok=True)
-        Path("output_data").mkdir(parents=True, exist_ok=True)
+        ensure_runtime_directories()
         
         logger.info(f"🚀 开始小红书Pro流水线 - 城市: {req.city}, 风格: {req.style}, 用户: {req.user_id or 'anonymous'}")
         
-        # 处理输入文件
         ts = int(time.time())
-        if req.video_url.startswith("file:"):
-            local_path = req.video_url.replace("file://", "")
-            if not Path(local_path).exists():
-                raise HTTPException(status_code=400, detail="本地文件不存在")
-            input_path = local_path
-        else:
-            input_path = str(Path("input_data/downloads") / f"xhs_pro_{ts}.mp4")
-            from urllib.request import urlretrieve
-            urlretrieve(req.video_url, input_path)
+        input_path = await materialize_video_source(req.video_url, "xhs_pro")
         
         pipeline_result = {
             'source_video': input_path,
@@ -2201,18 +2265,17 @@ async def xiaohongshu_pipeline_pro(req: XHSProPipelineReq):
 async def auto_intro(req: URLIntroReq):
     """Download video from URL, detect/extract subtitles or ASR, select highlights, cut 9:16, add simple fades, and concatenate into one intro video."""
     try:
-        Path("input_data/downloads").mkdir(parents=True, exist_ok=True)
-        Path("output_data").mkdir(parents=True, exist_ok=True)
+        ensure_runtime_directories()
 
-        # 1) download via yt-dlp if platform URL, else urlretrieve
+        # 1) download via yt-dlp for supported platforms, then use the guarded downloader
         ts = int(time.time())
-        dl_path = str(Path("input_data/downloads") / f"dl_{ts}.mp4")
+        dl_path = str(DOWNLOAD_DIR / f"dl_{ts}.mp4")
         try:
             import yt_dlp  # type: ignore
             ydl_opts = {
                 'format': 'bv*+ba/b',
                 'merge_output_format': 'mp4',
-                'outtmpl': str(Path("input_data/downloads") / f"dl_{ts}.%(ext)s"),
+                'outtmpl': str(DOWNLOAD_DIR / f"dl_{ts}.%(ext)s"),
                 'writesubtitles': True,
                 'subtitleslangs': ['zh.*','zh','zh-Hans','zh-Hant','en.*','en'],
                 'subtitleformat': 'srt',
@@ -2226,7 +2289,7 @@ async def auto_intro(req: URLIntroReq):
                     dl_path = info['requested_downloads'][0]['filepath']
                 else:
                     # fallback: guess mp4 path
-                    base = Path("input_data/downloads") / f"dl_{ts}"
+                    base = DOWNLOAD_DIR / f"dl_{ts}"
                     if (base.with_suffix('.mp4')).exists():
                         dl_path = str(base.with_suffix('.mp4'))
                 # normalize
@@ -2238,7 +2301,7 @@ async def auto_intro(req: URLIntroReq):
                     "yt-dlp",
                     "-f", "bv*+ba/b",
                     "--merge-output-format", "mp4",
-                    "-o", str(Path("input_data/downloads") / f"dl_{ts}.%(ext)s"),
+                    "-o", str(DOWNLOAD_DIR / f"dl_{ts}.%(ext)s"),
                     "--write-sub",
                     "--sub-lang", "zh.*,zh,zh-Hans,zh-Hant,en.*,en",
                     "--sub-format", "srt",
@@ -2248,7 +2311,7 @@ async def auto_intro(req: URLIntroReq):
                 if completed.returncode != 0:
                     raise RuntimeError(completed.stderr or "yt-dlp CLI failed")
                 # guess final mp4 path
-                base = Path("input_data/downloads") / f"dl_{ts}"
+                base = DOWNLOAD_DIR / f"dl_{ts}"
                 if (base.with_suffix('.mp4')).exists():
                     dl_path = str(base.with_suffix('.mp4'))
                 else:
@@ -2260,13 +2323,15 @@ async def auto_intro(req: URLIntroReq):
                             break
                 dl_path = str(Path(dl_path))
             except Exception:
-                # Fallback 2: direct URL download (works only for direct media URLs)
-                urlretrieve(req.url, dl_path)
+                # Fallback 2: direct URL download with redirect and size validation.
+                await asyncio.to_thread(
+                    download_public_file, req.url, Path(dl_path), MAX_FILE_SIZE
+                )
 
         # 2) try extract subtitle stream to SRT
-        srt_path = str(Path("output_data") / f"dl_{ts}.srt")
+        srt_path = str(OUTPUT_DIR / f"dl_{ts}.srt")
         # prefer subtitles downloaded by yt-dlp (scoped to current timestamp)
-        possible_srts = list(Path("input_data/downloads").glob(f"dl_{ts}*.srt"))
+        possible_srts = list(DOWNLOAD_DIR.glob(f"dl_{ts}*.srt"))
         if possible_srts:
             # pick the largest srt as best
             best = max(possible_srts, key=lambda p: p.stat().st_size)
@@ -2373,7 +2438,7 @@ async def auto_intro(req: URLIntroReq):
             f"fade=t=in:st=0:d=0.25,fade=t=out:st={fade_out_start:.2f}:d=0.25"
         )
 
-        out_final = req.output if req.output else str((Path("output_data") / f"intro_{ts}_916.mp4").resolve())
+        out_final = str(resolve_output_path(req.output, f"intro_{ts}_916.mp4"))
         cmd_single = [
             "ffmpeg", "-y", "-hwaccel", "none",
             "-i", dl_path,
@@ -2387,7 +2452,7 @@ async def auto_intro(req: URLIntroReq):
             "-shortest", "-movflags", "+faststart",
             out_final
         ]
-        safe_run_ffmpeg(cmd_single)
+        await asyncio.to_thread(safe_run_ffmpeg, cmd_single)
 
         # 7) optionally burn subtitles if we have srt and only if you want (requirement said: if has subs, do not add)
         # We skip burning here as per requirement to keep existing subtitles if present.
@@ -2407,14 +2472,78 @@ class MultiSegmentClippingReq(BaseModel):
     subtitle_path: Optional[str] = None
     topic: str
     target_segments: int = 3
-    segment_duration: float = 8.0
-    total_duration: float = 24.0
+    segment_duration: Optional[float] = None
+    total_duration: float = 60.0
     semantic_weight: float = 0.4
     visual_weight: float = 0.3
     audio_weight: float = 0.3
     include_intro: bool = True
     include_highlights: bool = True
     include_conclusion: bool = True
+    enable_content_analysis: bool = True
+    asr_model_size: str = "base"
+    asr_language: Optional[str] = None
+
+    @field_validator("video_path")
+    @classmethod
+    def validate_video_path(cls, value):
+        return str(resolve_media_path(value))
+
+    @field_validator("subtitle_path")
+    @classmethod
+    def validate_subtitle_path(cls, value):
+        return str(resolve_media_path(value)) if value else None
+
+    @field_validator("topic")
+    @classmethod
+    def validate_topic(cls, value):
+        if not value.strip():
+            raise ValueError("主题不能为空")
+        return value.strip()
+
+    @field_validator("target_segments")
+    @classmethod
+    def validate_target_segments(cls, value):
+        if not 1 <= value <= 10:
+            raise ValueError("目标片段数必须在 1-10 之间")
+        return value
+
+    @field_validator("segment_duration")
+    @classmethod
+    def validate_segment_duration(cls, value):
+        if value is not None and not 5 <= value <= 30:
+            raise ValueError("单片段时长必须在 5-30 秒之间")
+        return value
+
+    @field_validator("total_duration")
+    @classmethod
+    def validate_total_duration(cls, value):
+        if not 5 <= value <= 300:
+            raise ValueError("总时长必须在 5-300 秒之间")
+        return value
+
+    @field_validator("semantic_weight", "visual_weight", "audio_weight")
+    @classmethod
+    def validate_weight(cls, value):
+        if not 0 <= value <= 1:
+            raise ValueError("评分权重必须在 0-1 之间")
+        return value
+
+    @field_validator("asr_model_size")
+    @classmethod
+    def validate_asr_model_size(cls, value):
+        if value not in {"tiny", "base", "small", "medium", "large", "large-v2", "large-v3"}:
+            raise ValueError("不支持的 Whisper 模型")
+        return value
+
+    @model_validator(mode="after")
+    def validate_duration_budget(self):
+        minimum_total = self.target_segments * 5
+        if self.total_duration < minimum_total:
+            raise ValueError(f"{self.target_segments} 个片段的总时长至少需要 {minimum_total} 秒")
+        if self.segment_duration and self.segment_duration * self.target_segments > self.total_duration:
+            raise ValueError("单片段时长乘以片段数不能超过总时长")
+        return self
 
 def parse_srt_file(srt_path: str) -> List[Dict]:
     """解析SRT字幕文件"""
@@ -3221,113 +3350,14 @@ def calculate_audio_quality(segments: List[Dict]) -> float:
 
 @app.post("/video/multi_segment_clipping")
 async def multi_segment_intelligent_clipping(req: MultiSegmentClippingReq):
-    """智能多片段视频剪辑 - 从长视频中选择多个精彩片段组合"""
+    """Select measured audiovisual/semantic highlights and combine them."""
     try:
-        logger.info(f"开始智能多片段剪辑: {req.video_path}")
-        
-        # 1. 检查视频文件是否存在
-        if not os.path.exists(req.video_path):
-            raise HTTPException(status_code=404, detail=f"视频文件不存在: {req.video_path}")
-        
-        # 2. 分析视频基本信息
-        try:
-            result = subprocess.run([
-                "ffprobe", "-v", "quiet", "-print_format", "json", 
-                "-show_format", req.video_path
-            ], capture_output=True, text=True, check=True)
-            
-            video_info = json.loads(result.stdout)
-            total_duration = float(video_info['format']['duration'])
-            
-        except Exception as e:
-            logger.error(f"获取视频信息失败: {e}")
-            raise HTTPException(status_code=500, detail="无法获取视频信息")
-        
-        if total_duration < 60:
-            raise HTTPException(status_code=400, detail="视频时长太短，不适合多片段剪辑")
-        
-        logger.info(f"视频总时长: {total_duration:.1f}秒")
-        
-        # 3. 读取字幕文件
-        subtitle_segments = []
-        if req.subtitle_path and os.path.exists(req.subtitle_path):
-            subtitle_segments = parse_srt_file(req.subtitle_path)
-            logger.info(f"读取到{len(subtitle_segments)}个字幕片段")
-        else:
-            logger.warning("未找到字幕文件，将使用简化分析")
-        
-        # 4. 先进行智能内容分析
-        content_analysis = analyze_video_content_structure(subtitle_segments)
-        logger.info(f"内容分析完成：识别出{len(content_analysis['content_summary']['main_topics'])}个主要话题")
-        
-        # 打印分析摘要
-        for topic in content_analysis['content_summary']['main_topics'][:3]:
-            logger.info(f"话题: {topic['description']} - 相关性: {topic['avg_relevance']:.2f} - 片段数: {topic['segment_count']}")
-        
-        # 5. 基于内容分析结果进行视频片段分析
-        segments = analyze_video_segments_v2(req.video_path, subtitle_segments, total_duration, req.topic)
-        logger.info(f"分析了{len(segments)}个视频片段")
-        
-        # 6. 基于内容分析动态生成核心概念
-        core_concepts = generate_dynamic_concepts_from_analysis(content_analysis, req.topic)
-        logger.info(f"基于内容分析生成{len(core_concepts)}个核心概念")
-        
-        # 7. 基于分析结果智能选择片段
-        selected_segments = intelligent_segment_selection_v3(
-            segments, 
-            content_analysis,
-            core_concepts
-        )
-        
-        logger.info(f"选择了{len(selected_segments)}个片段进行组合")
-        
-        # 6. 生成组合视频
-        timestamp = int(time.time())
-        output_path = f"output_data/multi_clip_{timestamp}.mp4"
-        
-        combine_segments_to_video(req.video_path, selected_segments, output_path)
-        
-        logger.info(f"多片段视频生成完成: {output_path}")
-        
-        return {
-            "status": "success",
-            "output_video": output_path,
-            "selected_segments": [
-                {
-                    "start_time": seg['start_time'],
-                    "end_time": seg['end_time'],
-                    "duration": seg['duration'],
-                    "type": seg['type'],
-                    "score": round(seg['score'], 3),
-                    "preview_text": seg['text']
-                }
-                for seg in selected_segments
-            ],
-            "analysis": {
-                "total_video_duration": round(total_duration, 1),
-                "analyzed_segments": len(segments),
-                "selected_segments": len(selected_segments),
-                "total_output_duration": sum(seg['duration'] for seg in selected_segments),
-                "selection_strategy": {
-                    "semantic_weight": req.semantic_weight,
-                    "visual_weight": req.visual_weight,
-                    "audio_weight": req.audio_weight,
-                    "include_intro": req.include_intro,
-                    "include_highlights": req.include_highlights,
-                    "include_conclusion": req.include_conclusion
-                }
-            },
-            "quality_metrics": {
-                "content_coverage": round(calculate_content_coverage(selected_segments, subtitle_segments), 3),
-                "visual_quality": round(calculate_visual_quality(selected_segments), 3),
-                "audio_quality": round(calculate_audio_quality(selected_segments), 3),
-                "overall_score": round(sum(seg['score'] for seg in selected_segments) / len(selected_segments), 3) if selected_segments else 0
-            },
-            "message": f"成功生成{len(selected_segments)}个片段组合的智能剪辑视频"
-        }
-        
+        logger.info("开始智能多片段剪辑: %s", req.video_path)
+        return await asyncio.to_thread(process_multi_segment_video, req.model_dump())
     except HTTPException:
         raise
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"智能多片段剪辑失败: {e}")
         raise HTTPException(status_code=500, detail=f"智能多片段剪辑失败: {str(e)}")
@@ -3430,30 +3460,37 @@ async def upload_photos(files: List[UploadFile] = File(...)):
             raise HTTPException(status_code=400, detail="最多只能上传20张照片")
         
         uploaded_files = []
-        upload_dir = Path("output_data/uploads")
-        upload_dir.mkdir(parents=True, exist_ok=True)
+        max_image_bytes = int(os.getenv("MAX_IMAGE_FILE_SIZE", 25 * 1024 * 1024))
+        allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
         
         for file in files:
             # 验证文件类型
             if not file.content_type or not file.content_type.startswith('image/'):
                 raise HTTPException(status_code=400, detail=f"文件 {file.filename} 不是有效的图片格式")
             
-            # 生成唯一文件名
-            timestamp = int(time.time())
-            file_extension = Path(file.filename).suffix if file.filename else '.jpg'
-            unique_filename = f"photo_{timestamp}_{len(uploaded_files)}{file_extension}"
-            file_path = upload_dir / unique_filename
-            
-            # 保存文件
-            content = await file.read()
-            with open(file_path, "wb") as f:
-                f.write(content)
+            file_extension = Path(file.filename or "").suffix.lower() or ".jpg"
+            if file_extension not in allowed_extensions:
+                raise HTTPException(status_code=400, detail=f"不支持的图片扩展名: {file_extension}")
+            unique_filename = f"photo_{uuid.uuid4().hex}{file_extension}"
+            file_path = PHOTO_UPLOAD_DIR / unique_filename
+
+            size = 0
+            try:
+                async with aiofiles.open(file_path, "wb") as output:
+                    while chunk := await file.read(1024 * 1024):
+                        size += len(chunk)
+                        if size > max_image_bytes:
+                            raise HTTPException(status_code=413, detail=f"图片 {file.filename} 超过大小限制")
+                        await output.write(chunk)
+            except Exception:
+                file_path.unlink(missing_ok=True)
+                raise
             
             uploaded_files.append({
                 "original_name": file.filename,
                 "saved_path": str(file_path),
-                "url": f"/static/uploads/{unique_filename}",
-                "size": len(content)
+                "url": f"/output/uploads/{unique_filename}",
+                "size": size
             })
             
             logger.info(f"上传照片成功: {file.filename} -> {file_path}")
@@ -3464,6 +3501,8 @@ async def upload_photos(files: List[UploadFile] = File(...)):
             "files": uploaded_files
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"照片上传失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
@@ -3476,23 +3515,23 @@ async def upload_video(file: UploadFile = File(...)):
         if not file.content_type or not file.content_type.startswith('video/'):
             raise HTTPException(status_code=400, detail="请上传有效的视频文件")
         
-        # 检查文件大小 (限制500MB)
-        content = await file.read()
-        if len(content) > 500 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="视频文件大小不能超过500MB")
-        
-        upload_dir = Path("input_data/uploads")
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 生成唯一文件名
-        timestamp = int(time.time())
-        file_extension = Path(file.filename).suffix if file.filename else '.mp4'
-        unique_filename = f"video_{timestamp}{file_extension}"
-        file_path = upload_dir / unique_filename
-        
-        # 保存文件
-        with open(file_path, "wb") as f:
-            f.write(content)
+        file_extension = Path(file.filename or "").suffix.lower() or ".mp4"
+        if file_extension not in set(ALLOWED_VIDEO_EXTENSIONS):
+            raise HTTPException(status_code=400, detail=f"不支持的视频扩展名: {file_extension}")
+        unique_filename = f"video_{uuid.uuid4().hex}{file_extension}"
+        file_path = VIDEO_UPLOAD_DIR / unique_filename
+
+        size = 0
+        try:
+            async with aiofiles.open(file_path, "wb") as output:
+                while chunk := await file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_FILE_SIZE:
+                        raise HTTPException(status_code=413, detail="视频文件大小不能超过配置限制")
+                    await output.write(chunk)
+        except Exception:
+            file_path.unlink(missing_ok=True)
+            raise
         
         logger.info(f"上传视频成功: {file.filename} -> {file_path}")
         
@@ -3502,10 +3541,12 @@ async def upload_video(file: UploadFile = File(...)):
             "file": {
                 "original_name": file.filename,
                 "saved_path": str(file_path),
-                "size": len(content)
+                "size": size
             }
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"视频上传失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
@@ -3797,6 +3838,13 @@ class PageRenderReq(BaseModel):
     height: int = 1080
     quality: int = 95
 
+    @field_validator("images")
+    @classmethod
+    def validate_images(cls, value):
+        if not value:
+            raise ValueError("图片列表不能为空")
+        return [str(resolve_media_path(path)) for path in value]
+
 @app.post("/xiaohongshu/render_page")
 async def render_xhs_page(request: PageRenderReq):
     try:
@@ -3809,9 +3857,7 @@ async def render_xhs_page(request: PageRenderReq):
             if not img_paths:
                 raise HTTPException(status_code=400, detail="缺少图片")
             canvas = PILImage.new('RGB', (cfg.width, cfg.height), '#FFFFFF')
-            p = Path(img_paths[0])
-            if not p.exists():
-                p = Path("output_data")/img_paths[0]
+            p = resolve_media_path(img_paths[0])
             im = PILImage.open(p)
             if im.mode != 'RGB':
                 im = im.convert('RGB')
