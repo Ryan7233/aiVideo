@@ -3,13 +3,12 @@
 提供基于ASR转录结果的智能分析功能，包括关键词提取、情感分析、主题相关性评分等
 """
 
-import re
-import json
 import math
 import logging
-from typing import List, Dict, Tuple, Optional, Set
-from collections import Counter, defaultdict
-from pathlib import Path
+from typing import List, Dict, Tuple, Set
+from collections import Counter
+
+from core.text_tokenizer import content_tokens, scan_lexicon, split_sentences, tokenize
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,14 @@ class SemanticAnalyzer:
         self.emotion_keywords = self._load_emotion_keywords()
         self.topic_keywords = self._load_topic_keywords()
         self.importance_modifiers = self._load_importance_modifiers()
-        
+        # Flatten the per-polarity dictionaries once so a single longest-match
+        # scan can resolve overlapping entries such as 好 / 很好 / 不好.
+        self._emotion_lexicon: Dict[str, Tuple[str, float]] = {}
+        for polarity, entries in self.emotion_keywords.items():
+            for term, weight in entries.items():
+                self._emotion_lexicon[term] = (polarity, weight)
+        self._emotion_weights = {term: weight for term, (_, weight) in self._emotion_lexicon.items()}
+
         logger.info("语义分析器初始化完成")
     
     def _load_stop_words(self) -> Set[str]:
@@ -50,8 +56,17 @@ class SemanticAnalyzer:
             '现在', '已经', '还是', '可以', '应该', '能够', '需要', '想要', '知道',
             '觉得', '认为', '发现', '开始', '结束', '继续', '停止', '完成'
         }
-        
-        return english_stop_words | chinese_stop_words
+
+        # ASR transcripts are full of these; without them filler-only speech
+        # scores as legitimate content.
+        chinese_filler_words = {
+            '嗯', '呃', '啊', '哦', '噢', '呀', '吧', '呢', '嘛', '哈', '哎',
+            '就是', '然后', '那个', '这个', '就是说', '其实', '反正', '真的',
+            '一下', '一点', '有点', '比较', '可能', '大概', '差不多', '怎么说',
+            '你知道', '对不对', '是不是', '这样子', '那么'
+        }
+
+        return english_stop_words | chinese_stop_words | chinese_filler_words
     
     def _load_emotion_keywords(self) -> Dict[str, Dict[str, float]]:
         """加载情感关键词字典"""
@@ -129,6 +144,30 @@ class SemanticAnalyzer:
                 'wellness', 'mental', 'physical', 'body', 'mind', 'stress', 'relax',
                 '健康', '健身', '锻炼', '饮食', '营养', '医疗', '医生', '医院',
                 '药物', '治疗', '身体', '心理', '压力', '放松'
+            ],
+            'food': [
+                'food', 'restaurant', 'cafe', 'coffee', 'latte', 'dessert', 'brunch',
+                'taste', 'delicious', 'menu', 'dish', 'cuisine', 'bakery', 'snack',
+                '美食', '好吃', '好喝', '餐厅', '咖啡', '拿铁', '甜品', '探店',
+                '菜单', '口味', '味道', '食材', '烘焙', '早午餐', '小吃', '打卡'
+            ],
+            'travel': [
+                'travel', 'trip', 'journey', 'hotel', 'flight', 'itinerary', 'city',
+                'scenery', 'attraction', 'checkin', 'weekend', 'vacation', 'resort',
+                '旅行', '旅游', '攻略', '行程', '酒店', '民宿', '机票', '景点',
+                '风景', '路线', '周末', '度假', '出行', '拍照', '出片'
+            ],
+            'beauty': [
+                'beauty', 'makeup', 'skincare', 'cosmetic', 'lipstick', 'foundation',
+                'serum', 'moisturizer', 'fragrance', 'outfit', 'fashion', 'style',
+                '美妆', '护肤', '化妆', '口红', '粉底', '精华', '面膜', '香水',
+                '穿搭', '时尚', '妆容', '成分', '平价', '种草'
+            ],
+            'lifestyle': [
+                'lifestyle', 'home', 'decor', 'routine', 'habit', 'organize', 'cozy',
+                'vlog', 'daily', 'share', 'recommend', 'review', 'budget',
+                '生活', '日常', '家居', '布置', '收纳', '习惯', '好物', '推荐',
+                '分享', '测评', '性价比', '踩雷', '避雷', '氛围感'
             ]
         }
     
@@ -147,153 +186,154 @@ class SemanticAnalyzer:
             '不': -0.8, '没': -0.7, '从不': -0.9, '绝不': -0.9
         }
     
+    def _modifier_factor(self, sentence: str) -> float:
+        """Turn the emphasis/negation words in one sentence into a multiplier."""
+        factor = 1.0
+        for _, weight in scan_lexicon(sentence, self.importance_modifiers):
+            # Positive entries amplify (很 -> 1.1); negative entries are
+            # negations, which dampen importance rather than invert it.
+            factor *= weight if weight > 0 else max(0.2, 1.0 + weight)
+        return max(0.2, min(factor, 2.0))
+
     def extract_keywords(self, text: str, top_k: int = 10) -> List[Dict[str, any]]:
         """
         提取关键词
-        
+
         Args:
             text: 输入文本
             top_k: 返回前k个关键词
-            
+
         Returns:
             关键词列表，包含词汇、频率、重要性分数
         """
         try:
-            # 文本预处理
-            text = text.lower()
-            # 分词（简单实现，可以集成更复杂的分词器）
-            words = re.findall(r'\b\w+\b', text)
-            
-            # 过滤停用词
-            words = [word for word in words if word not in self.stop_words and len(word) > 2]
-            
-            # 计算词频
-            word_freq = Counter(words)
+            words = content_tokens(tokenize(text), self.stop_words)
+            if not words:
+                return []
+
             total_words = len(words)
-            
-            # 计算TF-IDF风格的重要性分数
+            word_freq = Counter(words)
+
+            # Each sentence carries its own emphasis; a word inherits the
+            # strongest emphasis of any sentence it appears in.
+            modifiers: Dict[str, float] = {}
+            for sentence in split_sentences(text):
+                factor = self._modifier_factor(sentence)
+                for token in set(content_tokens(tokenize(sentence), self.stop_words)):
+                    modifiers[token] = max(modifiers.get(token, 0.0), factor)
+
             keywords = []
             for word, freq in word_freq.items():
                 tf = freq / total_words
-                # 简化的IDF计算（实际应用中可以使用预训练的IDF值）
-                idf = math.log(total_words / freq)
-                
-                # 基础分数
-                base_score = tf * idf
-                
-                # 应用重要性修饰符
-                importance_modifier = 1.0
-                for modifier, weight in self.importance_modifiers.items():
-                    if modifier in text and word in text:
-                        importance_modifier *= weight
-                
-                final_score = base_score * importance_modifier
-                
+                # Single-document IDF: log(1 + N/f) so a hapax still scores
+                # above zero. The old log(N/f) collapsed to 0 whenever every
+                # token was unique, which is the normal case for one segment.
+                idf = math.log(1 + total_words / freq)
+                importance_modifier = modifiers.get(word, 1.0)
+
                 keywords.append({
                     'word': word,
                     'frequency': freq,
                     'tf': tf,
-                    'score': final_score,
+                    'score': tf * idf * importance_modifier,
                     'importance_modifier': importance_modifier
                 })
-            
-            # 按分数排序
+
             keywords.sort(key=lambda x: x['score'], reverse=True)
-            
+
             return keywords[:top_k]
-            
+
         except Exception as e:
             logger.error(f"关键词提取失败: {str(e)}")
             return []
-    
+
     def analyze_sentiment(self, text: str) -> Dict[str, float]:
         """
         情感分析
-        
+
         Args:
             text: 输入文本
-            
+
         Returns:
             情感分析结果：positive, negative, neutral scores
         """
         try:
-            text = text.lower()
-            words = re.findall(r'\b\w+\b', text)
-            
             sentiment_scores = {'positive': 0.0, 'negative': 0.0, 'neutral': 0.0}
             total_sentiment_words = 0
-            
-            for word in words:
-                for sentiment_type, sentiment_words in self.emotion_keywords.items():
-                    if word in sentiment_words:
-                        sentiment_scores[sentiment_type] += sentiment_words[word]
-                        total_sentiment_words += 1
-            
+
+            # Longest-match scan instead of token lookup: Chinese sentiment
+            # words are substrings of a continuous run, and 不好 has to win
+            # over 好 rather than both firing.
+            for term, weight in scan_lexicon(text, self._emotion_weights):
+                polarity, _ = self._emotion_lexicon[term]
+                sentiment_scores[polarity] += weight
+                total_sentiment_words += 1
+
             # 归一化分数
             if total_sentiment_words > 0:
                 for sentiment_type in sentiment_scores:
                     sentiment_scores[sentiment_type] /= total_sentiment_words
-            
+
             # 计算总体情感倾向
             overall_sentiment = (
-                sentiment_scores['positive'] + 
-                sentiment_scores['negative'] + 
+                sentiment_scores['positive'] +
+                sentiment_scores['negative'] +
                 sentiment_scores['neutral']
             )
-            
+
             # 计算情感强度
             sentiment_intensity = abs(sentiment_scores['positive']) + abs(sentiment_scores['negative'])
-            
+
             return {
                 'positive': max(0, sentiment_scores['positive']),
                 'negative': abs(min(0, sentiment_scores['negative'])),
                 'neutral': sentiment_scores['neutral'],
                 'overall': overall_sentiment,
                 'intensity': sentiment_intensity,
-                'dominant': max(sentiment_scores.items(), key=lambda x: abs(x[1]))[0]
+                'dominant': (
+                    max(sentiment_scores.items(), key=lambda x: abs(x[1]))[0]
+                    if sentiment_intensity > 0 else 'neutral'
+                )
             }
-            
+
         except Exception as e:
             logger.error(f"情感分析失败: {str(e)}")
             return {
                 'positive': 0.0, 'negative': 0.0, 'neutral': 0.0,
                 'overall': 0.0, 'intensity': 0.0, 'dominant': 'neutral'
             }
-    
+
     def analyze_topic_relevance(self, text: str) -> Dict[str, float]:
         """
         主题相关性分析
-        
+
         Args:
             text: 输入文本
-            
+
         Returns:
             各主题的相关性分数
         """
         try:
-            text = text.lower()
-            words = set(re.findall(r'\b\w+\b', text))
-            
             topic_scores = {}
-            
+
             for topic, keywords in self.topic_keywords.items():
-                # 计算主题关键词匹配度
-                matched_keywords = words.intersection(set(keyword.lower() for keyword in keywords))
-                
-                if keywords:
-                    relevance_score = len(matched_keywords) / len(keywords)
-                    # 考虑关键词在文本中的权重
-                    weighted_score = relevance_score * (1 + len(matched_keywords) * 0.1)
-                    topic_scores[topic] = min(weighted_score, 1.0)
-                else:
+                if not keywords:
                     topic_scores[topic] = 0.0
-            
+                    continue
+
+                lexicon = {keyword: 1.0 for keyword in keywords}
+                matched = {term for term, _ in scan_lexicon(text, lexicon)}
+                # Saturating rather than matched/len(keywords): a bucket holds
+                # ~37 synonyms, so dividing by all of them capped an obviously
+                # on-topic segment at about 0.08.
+                topic_scores[topic] = min(1.0, len(matched) / 3.0)
+
             return topic_scores
-            
+
         except Exception as e:
             logger.error(f"主题相关性分析失败: {str(e)}")
             return {topic: 0.0 for topic in self.topic_keywords.keys()}
-    
+
     def calculate_content_quality_score(self, text: str, duration: float = 0) -> Dict[str, float]:
         """
         计算内容质量综合分数
@@ -307,53 +347,58 @@ class SemanticAnalyzer:
         """
         try:
             # 基础指标
-            word_count = len(text.split())
-            char_count = len(text)
-            sentence_count = len(re.split(r'[.!?。！？]', text))
-            
-            # 关键词分析
-            keywords = self.extract_keywords(text, top_k=5)
-            keyword_diversity = len(set(kw['word'] for kw in keywords))
-            
+            tokens = tokenize(text)
+            meaningful = content_tokens(tokens, self.stop_words)
+            word_count = len(tokens)
+            sentence_count = max(1, len(split_sentences(text)))
+
             # 情感分析
             sentiment = self.analyze_sentiment(text)
-            
+
             # 主题相关性
             topic_relevance = self.analyze_topic_relevance(text)
             max_topic_score = max(topic_relevance.values()) if topic_relevance else 0
-            
+
             # 计算各维度分数
             scores = {}
-            
+
             # 1. 内容丰富度 (0-1)
             if duration > 0:
                 words_per_second = word_count / duration
                 scores['content_density'] = min(words_per_second / 3.0, 1.0)  # 假设3词/秒为满分
             else:
                 scores['content_density'] = min(word_count / 100.0, 1.0)  # 假设100词为满分
-            
+
             # 2. 词汇多样性 (0-1)
-            if word_count > 0:
-                scores['vocabulary_diversity'] = min(keyword_diversity / (word_count * 0.1), 1.0)
+            # Two halves: how much of the speech is actually content rather
+            # than stop words and filler, and how varied that content is.
+            # The old formula was keyword_diversity / (word_count * 0.1),
+            # which saturated at 1.0 for every input.
+            if word_count > 0 and meaningful:
+                content_ratio = len(meaningful) / word_count
+                type_token_ratio = len(set(meaningful)) / len(meaningful)
+                scores['vocabulary_diversity'] = min(
+                    1.0, content_ratio * 0.5 + type_token_ratio * 0.5
+                )
             else:
                 scores['vocabulary_diversity'] = 0.0
-            
+
             # 3. 情感强度 (0-1)
             scores['emotional_intensity'] = min(sentiment['intensity'], 1.0)
-            
+
             # 4. 主题相关性 (0-1)
             scores['topic_relevance'] = max_topic_score
-            
+
             # 5. 结构完整性 (0-1)
             if word_count > 0:
-                avg_sentence_length = word_count / max(sentence_count, 1)
+                avg_sentence_length = word_count / sentence_count
                 scores['structure_quality'] = min(avg_sentence_length / 15.0, 1.0)  # 假设15词/句为理想
             else:
                 scores['structure_quality'] = 0.0
-            
+
             # 6. 积极性 (0-1)
             scores['positivity'] = sentiment['positive']
-            
+
             # 综合分数计算
             weights = {
                 'content_density': 0.25,
@@ -376,7 +421,10 @@ class SemanticAnalyzer:
                 'positivity': scores['positivity'],
                 'word_count': word_count,
                 'sentence_count': sentence_count,
-                'dominant_topic': max(topic_relevance.items(), key=lambda x: x[1])[0] if topic_relevance else 'unknown',
+                'dominant_topic': (
+                    max(topic_relevance.items(), key=lambda x: x[1])[0]
+                    if max_topic_score > 0 else 'unknown'
+                ),
                 'dominant_sentiment': sentiment['dominant']
             }
             
