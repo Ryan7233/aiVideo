@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 # Import core processing functions from api.main
 # We'll create a shared processing module to avoid circular imports
-from core.settings import settings
 from core.config import MAX_FILE_SIZE
 from core.runtime import DOWNLOAD_DIR, OUTPUT_DIR, download_public_file, resolve_media_path, resolve_output_path
 
@@ -33,6 +32,20 @@ def _materialize_worker_source(url: str, prefix: str) -> str:
         return str(resolve_media_path(url))
     destination = DOWNLOAD_DIR / f"{prefix}_{int(time.time())}_{os.getpid()}.mp4"
     return str(download_public_file(url, destination, MAX_FILE_SIZE))
+
+
+@celery_app.task(bind=True, name="worker.tasks.run_registered_job")
+def run_registered_job(self, kind: str, params: dict, job_id: str):
+    """Run a job registered in core.jobs and record it in the job store.
+
+    Importing api.main is what registers the pipeline handlers; it is done
+    here rather than at module import so the worker only pays for it when a
+    job actually arrives.
+    """
+    import api.main  # noqa: F401  (registers the xiaohongshu pipeline handlers)
+    from core.jobs import run_job
+
+    return run_job(kind, params, job_id)
 
 
 @celery_app.task(bind=True, name="worker.tasks.process_video_async")

@@ -34,10 +34,13 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - JOB_BACKEND=celery
+      - AIVIDEO_DB_PATH=/app/state/aivideo.db
     volumes:
       - ./input_data:/app/input_data
       - ./output_data:/app/output_data
       - ./logs:/app/logs
+      - job_state:/app/state
       - api_cache:/app/.cache
     depends_on:
       redis:
@@ -64,11 +67,14 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - C_FORCE_ROOT=1
+      - JOB_BACKEND=celery
+      - AIVIDEO_DB_PATH=/app/state/aivideo.db
     volumes:
       - ./input_data:/app/input_data
       - ./output_data:/app/output_data
       - ./logs:/app/logs
       - ./models:/app/models  # Whisper模型缓存
+      - job_state:/app/state
       - worker_cache:/app/.cache
     depends_on:
       redis:
@@ -228,6 +234,7 @@ networks:
 
 # 数据卷配置
 volumes:
+  job_state:
   redis_data:
     driver: local
   minio_data:

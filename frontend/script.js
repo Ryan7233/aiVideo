@@ -442,18 +442,7 @@ async function startProcessing() {
         updateProcessingStatus('正在执行语音识别、智能选段并生成视频...', 35);
         updateProcessingStep('analyze');
         
-        const response = await fetch(`${API_BASE_URL}/video/multi_segment_clipping`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(requestData)
-        });
-        
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result.detail || result.message || `请求失败 (${response.status})`);
-        }
+        const result = await runClippingJob(requestData);
         
         if (result.status === 'success') {
             updateProcessingStep('select');
@@ -472,6 +461,78 @@ async function startProcessing() {
         console.error('Processing error:', error);
         goToStep(2);
     }
+}
+
+// Clipping runs for minutes, so it is submitted as a background job and polled.
+// Falls back to the original synchronous endpoint when /jobs is unavailable.
+const JOB_POLL_INTERVAL_MS = 1500;
+const JOB_POLL_TIMEOUT_MS = 30 * 60 * 1000;
+
+async function runClippingJob(requestData) {
+    const submission = await fetch(`${API_BASE_URL}/jobs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'multi_segment_clipping', params: requestData })
+    });
+
+    if (submission.status === 404 || submission.status === 405) {
+        console.warn('Job API unavailable, falling back to the synchronous endpoint');
+        return runClippingSynchronously(requestData);
+    }
+
+    const submitted = await submission.json();
+    if (!submission.ok) {
+        throw new Error(submitted.detail || submitted.message || `任务提交失败 (${submission.status})`);
+    }
+
+    return pollJob(submitted.job_id);
+}
+
+async function pollJob(jobId) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < JOB_POLL_TIMEOUT_MS) {
+        await new Promise(resolve => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+
+        const response = await fetch(`${API_BASE_URL}/jobs/${jobId}`);
+        if (!response.ok) {
+            throw new Error(`无法查询任务状态 (${response.status})`);
+        }
+        const job = await response.json();
+
+        if (!job.done) {
+            const elapsed = Math.round((Date.now() - startedAt) / 1000);
+            const step = (job.progress && job.progress.step) || job.status;
+            // Creep toward 90% on elapsed time; only completion reaches 100.
+            const percentage = Math.min(90, 35 + Math.floor(elapsed / 4));
+            updateProcessingStatus(`处理中（${step}，已用时 ${elapsed}s）...`, percentage);
+            continue;
+        }
+
+        if (job.status === 'succeeded') {
+            return job.result;
+        }
+        if (job.status === 'cancelled') {
+            throw new Error('任务已取消');
+        }
+        throw new Error(job.error || '任务失败');
+    }
+
+    throw new Error('任务超时，请稍后在任务列表中查看结果');
+}
+
+async function runClippingSynchronously(requestData) {
+    const response = await fetch(`${API_BASE_URL}/video/multi_segment_clipping`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestData)
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+        throw new Error(result.detail || result.message || `请求失败 (${response.status})`);
+    }
+    return result;
 }
 
 function updateProcessingStatus(status, percentage) {

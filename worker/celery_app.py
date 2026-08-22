@@ -1,10 +1,10 @@
 from celery import Celery
-from core.settings import settings
+from core.config import CELERY_BROKER_URL, CELERY_RESULT_BACKEND
 
 celery_app = Celery(
     "ai_video_clipper",
-    broker=settings.celery_broker_url,
-    backend=settings.celery_result_backend,
+    broker=CELERY_BROKER_URL,
+    backend=CELERY_RESULT_BACKEND,
     include=["worker.tasks"]
 )
 
