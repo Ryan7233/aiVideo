@@ -5,12 +5,13 @@
 
 import subprocess
 import re
-import json
-import math
+import tempfile
 import time
 from typing import List, Dict, Tuple, Optional
 from pathlib import Path
 import logging
+
+from core.concurrency import run_ffmpeg
 
 logger = logging.getLogger(__name__)
 
@@ -22,228 +23,167 @@ class SmartClippingEngine:
         self.scene_threshold = 0.3  # 场景变化阈值
         self.audio_energy_window = 1.0  # 音频能量分析窗口(秒)
         self.min_segment_gap = 2.0  # 最小片段间隔(秒)
+        self.motion_sample_fps = 2  # 运动采样频率(帧/秒)
     
     def analyze_video_content(self, video_path: str, max_duration: int = 900) -> Dict:
         """
         全面分析视频内容
-        
+
+        Scene changes, motion and audio energy are all collected in a single
+        FFmpeg decode. The previous implementation ran three separate commands,
+        each decoding the whole file, and scraped the numbers back out of
+        stderr with regexes that broke silently on new FFmpeg releases.
+
         Args:
             video_path: 视频文件路径
             max_duration: 最大分析时长(秒)，避免长视频分析过久
-            
+
         Returns:
             包含场景变化、音频能量、视频时长等信息的字典
         """
         try:
             logger.info(f"Starting comprehensive video analysis for: {video_path}")
-            
-            # 获取视频基本信息
+
             duration = self._get_video_duration(video_path)
             if duration <= 0:
                 raise ValueError("Invalid video duration")
-            
-            # 限制分析时长
+
             analysis_duration = min(duration, max_duration)
-            
-            # 并行分析各项指标
-            scene_changes = self._detect_scene_changes(video_path, analysis_duration)
-            audio_energy = self._analyze_audio_energy(video_path, analysis_duration)
-            motion_activity = self._analyze_motion_activity(video_path, analysis_duration)
-            
+            measurements = self._measure_streams(video_path, analysis_duration)
+
             return {
                 'duration': duration,
                 'analysis_duration': analysis_duration,
-                'scene_changes': scene_changes,
-                'audio_energy': audio_energy,
-                'motion_activity': motion_activity,
-                'timestamp': int(time.time()) if 'time' in globals() else 0
+                'scene_changes': measurements['scene_changes'],
+                'audio_energy': measurements['audio_energy'],
+                'motion_activity': measurements['motion_activity'],
+                'timestamp': int(time.time())
             }
-            
+
         except Exception as e:
             logger.error(f"Video analysis failed: {str(e)}")
             return self._get_fallback_analysis(video_path)
-    
-    def _detect_scene_changes(self, video_path: str, duration: int) -> List[Dict]:
-        """
-        使用FFmpeg scdet filter检测场景变化
-        
-        Returns:
-            List of scene changes with timestamps and scores
-        """
+
+    def _has_audio_stream(self, video_path: str) -> bool:
+        """Check for an audio stream before wiring it into the filter graph."""
         try:
-            # 使用scdet filter而不是scene filter
-            cmd = [
-                "ffmpeg", "-hide_banner", "-i", video_path,
-                "-t", str(duration),
-                "-vf", f"scdet=t={self.scene_threshold}:sc_pass=1",
-                "-an", "-f", "null", "-"
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            stderr_output = result.stderr or ""
-            
-            # 解析场景变化时间点 - 更新正则表达式
-            scene_pattern = r"scene_score=([0-9.]+).*pts_time:([0-9.]+)"
-            matches = re.findall(scene_pattern, stderr_output)
-            
-            # 如果第一个正则不匹配，尝试另一种格式
-            if not matches:
-                scene_pattern = r"scdet.*score=([0-9.]+).*time:([0-9.]+)"
-                matches = re.findall(scene_pattern, stderr_output)
-            
-            scenes = []
-            for score_str, time_str in matches:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "a:0",
+                 "-show_entries", "stream=index", "-of", "csv=p=0", video_path],
+                capture_output=True, text=True, timeout=30,
+            )
+            return bool(result.stdout.strip())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _parse_metadata_file(path: Path, key: str) -> List[Tuple[float, float]]:
+        """Read an FFmpeg ``metadata=print`` dump into (timestamp, value) pairs.
+
+        The format is a ``frame:... pts_time:N`` header followed by one
+        ``key=value`` line per requested key.
+        """
+        if not path.exists():
+            return []
+        points: List[Tuple[float, float]] = []
+        timestamp: Optional[float] = None
+        for line in path.read_text(errors="ignore").splitlines():
+            line = line.strip()
+            if line.startswith("frame:"):
+                match = re.search(r"pts_time:(-?[0-9.]+)", line)
+                timestamp = float(match.group(1)) if match else None
+            elif "=" in line and timestamp is not None:
+                name, _, raw = line.partition("=")
+                if name.strip() != key:
+                    continue
                 try:
-                    score = float(score_str)
-                    timestamp = float(time_str)
-                    if score >= self.scene_threshold:
-                        scenes.append({
-                            'timestamp': timestamp,
-                            'score': score,
-                            'type': 'scene_change'
-                        })
+                    points.append((timestamp, float(raw.strip())))
                 except ValueError:
                     continue
-            
-            # 如果还是没有结果，尝试简化的方法
-            if not scenes:
-                logger.info("Trying alternative scene detection method")
-                cmd_alt = [
-                    "ffmpeg", "-hide_banner", "-i", video_path,
-                    "-t", str(min(duration, 60)),  # 限制为60秒以加快分析
-                    "-vf", "select='gt(scene,0.3)',showinfo",
-                    "-an", "-f", "null", "-"
-                ]
-                result_alt = subprocess.run(cmd_alt, capture_output=True, text=True, timeout=120)
-                alt_output = result_alt.stderr or ""
-                
-                # 解析showinfo输出
-                info_pattern = r"pts_time:([0-9.]+)"
-                time_matches = re.findall(info_pattern, alt_output)
-                
-                for i, time_str in enumerate(time_matches):
-                    try:
-                        timestamp = float(time_str)
-                        scenes.append({
-                            'timestamp': timestamp,
-                            'score': 0.4,  # 默认评分
-                            'type': 'scene_change'
-                        })
-                    except ValueError:
-                        continue
-            
-            logger.info(f"Detected {len(scenes)} scene changes")
-            return sorted(scenes, key=lambda x: x['timestamp'])
-            
-        except Exception as e:
-            logger.warning(f"Scene detection failed: {str(e)}")
-            return []
-    
-    def _analyze_audio_energy(self, video_path: str, duration: int) -> List[Dict]:
-        """
-        分析音频RMS能量分布
-        
-        Returns:
-            List of audio energy measurements over time
-        """
-        try:
-            # Resample to 16 kHz and emit one real RMS measurement per second.
-            cmd = [
-                "ffmpeg", "-hide_banner", "-nostats", "-i", video_path,
-                "-t", str(min(duration, 900)),
-                "-af", (
-                    "aresample=16000,asetnsamples=n=16000:p=0,"
+        return points
+
+    def _measure_streams(self, video_path: str, duration: float) -> Dict[str, List[Dict]]:
+        """Run one decode that emits scene, motion and audio metadata."""
+        with tempfile.TemporaryDirectory(prefix="aivideo_analysis_") as tmp:
+            tmp_path = Path(tmp)
+            scene_file = tmp_path / "scenes.txt"
+            motion_file = tmp_path / "motion.txt"
+            audio_file = tmp_path / "audio.txt"
+
+            chains = [
+                "[0:v]split=2[v_scene][v_motion]",
+                f"[v_scene]scdet=t={self.scene_threshold}:sc_pass=1,"
+                f"metadata=print:file={self._escape_filter_path(scene_file)}[scene_out]",
+                # YDIF is the mean luma difference between consecutive frames:
+                # an actual motion magnitude, unlike the old pass which just
+                # re-ran scene detection at a lower threshold and recorded 1.0.
+                f"[v_motion]fps={self.motion_sample_fps},signalstats,"
+                f"metadata=print:file={self._escape_filter_path(motion_file)}"
+                f":key=lavfi.signalstats.YDIF[motion_out]",
+            ]
+            maps = ["-map", "[scene_out]", "-map", "[motion_out]"]
+
+            has_audio = self._has_audio_stream(video_path)
+            if has_audio:
+                chains.append(
+                    "[0:a]aresample=16000,asetnsamples=n=16000:p=0,"
                     "astats=metadata=1:reset=1,"
-                    "ametadata=print:key=lavfi.astats.Overall.RMS_level"
-                ),
-                "-vn", "-f", "null", "-"
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-            stderr_output = result.stderr or ""
-            
-            energy_data = []
-            output = f"{result.stdout or ''}\n{stderr_output}"
-            current_timestamp = None
-            for line in output.splitlines():
-                time_match = re.search(r"pts_time:([0-9.]+)", line)
-                if time_match:
-                    current_timestamp = float(time_match.group(1))
-                rms_match = re.search(r"lavfi\.astats\.Overall\.RMS_level=([-+\w.]+)", line)
-                if rms_match and current_timestamp is not None:
-                    try:
-                        rms_db = float(rms_match.group(1))
-                    except ValueError:
-                        rms_db = -60.0
-                    energy_data.append({
-                        'timestamp': current_timestamp,
-                        'rms_db': rms_db,
-                        'energy': max(0.0, min(1.0, (rms_db + 60.0) / 60.0)),
-                        'type': 'audio_energy'
-                    })
-            
-            # 如果没有音频数据，尝试更简单的方法
-            if not energy_data:
-                logger.info("No audio energy metadata detected")
-            
-            logger.info(f"Analyzed {len(energy_data)} audio energy points")
-            return energy_data
-            
-        except Exception as e:
-            logger.warning(f"Audio energy analysis failed: {str(e)}")
-            # 返回默认数据
-            return [{
-                'timestamp': 0.0,
-                'rms_db': -20.0,
-                'energy': 0.5,
-                'type': 'audio_energy'
-            }]
-    
-    def _analyze_motion_activity(self, video_path: str, duration: int) -> List[Dict]:
-        """
-        分析视频运动活跃度
-        
-        Returns:
-            List of motion activity measurements
-        """
-        try:
-            # 使用select filter计算帧间差异
+                    f"ametadata=print:file={self._escape_filter_path(audio_file)}"
+                    ":key=lavfi.astats.Overall.RMS_level[audio_out]"
+                )
+                maps += ["-map", "[audio_out]"]
+
             cmd = [
-                "ffmpeg", "-hide_banner", "-i", video_path,
-                "-t", str(duration),
-                "-vf", "select='gt(scene,0.01)',showinfo",
-                "-an", "-f", "null", "-"
+                "ffmpeg", "-hide_banner", "-nostats", "-loglevel", "error",
+                "-i", video_path, "-t", f"{duration:.3f}",
+                "-filter_complex", ";".join(chains),
+                *maps, "-f", "null", "-",
             ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            stderr_output = result.stderr or ""
-            
-            # 解析运动信息
-            motion_pattern = r"pts_time:([0-9.]+).*pos:([0-9]+)"
-            matches = re.findall(motion_pattern, stderr_output)
-            
-            motion_data = []
-            prev_time = 0
-            for time_str, pos_str in matches:
-                try:
-                    timestamp = float(time_str)
-                    if timestamp > prev_time + 0.5:  # 每0.5秒采样一次
-                        motion_data.append({
-                            'timestamp': timestamp,
-                            'activity': 1.0,  # 有运动
-                            'type': 'motion'
-                        })
-                        prev_time = timestamp
-                except ValueError:
-                    continue
-            
-            logger.info(f"Analyzed {len(motion_data)} motion activity points")
-            return motion_data
-            
-        except Exception as e:
-            logger.warning(f"Motion analysis failed: {str(e)}")
-            return []
-    
+            result = run_ffmpeg(cmd, timeout=900)
+            if result.returncode != 0:
+                raise RuntimeError(f"analysis pass failed: {(result.stderr or '')[-2000:]}")
+
+            scene_changes = [
+                {'timestamp': ts, 'score': score, 'type': 'scene_change'}
+                for ts, score in self._parse_metadata_file(scene_file, "lavfi.scd.score")
+            ]
+            motion_activity = [
+                {
+                    'timestamp': ts,
+                    # YDIF is 0-255; normal footage sits well under 20, so that
+                    # is the point where motion counts as fully active.
+                    'activity': max(0.0, min(1.0, ydif / 20.0)),
+                    'ydif': ydif,
+                    'type': 'motion',
+                }
+                for ts, ydif in self._parse_metadata_file(motion_file, "lavfi.signalstats.YDIF")
+            ]
+            audio_energy = [
+                {
+                    'timestamp': ts,
+                    'rms_db': rms_db,
+                    'energy': max(0.0, min(1.0, (rms_db + 60.0) / 60.0)),
+                    'type': 'audio_energy',
+                }
+                for ts, rms_db in self._parse_metadata_file(audio_file, "lavfi.astats.Overall.RMS_level")
+            ]
+
+        logger.info(
+            "Analysis pass: %d scene changes, %d motion samples, %d audio samples%s",
+            len(scene_changes), len(motion_activity), len(audio_energy),
+            "" if has_audio else " (no audio stream)",
+        )
+        return {
+            'scene_changes': scene_changes,
+            'motion_activity': motion_activity,
+            'audio_energy': audio_energy,
+        }
+
+    @staticmethod
+    def _escape_filter_path(path: Path) -> str:
+        """Escape a path for use inside an FFmpeg filter argument."""
+        return str(path).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+
     def calculate_segment_scores(self, analysis: Dict, min_duration: int, max_duration: int) -> List[Dict]:
         """
         基于分析结果计算各时间段的综合评分
@@ -327,8 +267,13 @@ class SmartClippingEngine:
         # 3. 运动活跃度评分
         window_motion = [m for m in motion_activity 
                         if start_time <= m['timestamp'] <= end_time]
-        motion_density = len(window_motion) / max(1, end_time - start_time)
-        motion_score = min(1.0, motion_density * 2)  # 运动密度越高越好，但有上限
+        # Mean measured motion magnitude in the window; the old sample count
+        # only measured the sampling rate.
+        motion_density = (
+            sum(m.get('activity', 0.0) for m in window_motion) / len(window_motion)
+            if window_motion else 0.0
+        )
+        motion_score = min(1.0, motion_density)
         
         # 4. 位置评分 - 稍微偏好视频前半部分
         total_duration = max(1, end_time)
