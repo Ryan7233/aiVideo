@@ -91,6 +91,11 @@ celerybeat.pid
 # Redis dump
 dump.rdb
 
+# Job store
+*.db
+*.db-wal
+*.db-shm
+
 # Environment variables
 .env.local
 .env.development

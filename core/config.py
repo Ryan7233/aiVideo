@@ -1,5 +1,4 @@
 import os
-from typing import List, Dict, Any
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -21,6 +20,10 @@ AUDIO_BITRATE = os.getenv("AUDIO_BITRATE", "128k")
 # Storage Configuration
 UPLOAD_BUCKET = os.getenv("UPLOAD_BUCKET", "clips")
 UPLOAD_BASE_URL = os.getenv("UPLOAD_BASE_URL", "https://storage.example.com")
+
+# Celery/Queue Configuration
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/1")
 
 # Security Configuration
 ALLOWED_VIDEO_EXTENSIONS = os.getenv("ALLOWED_VIDEO_EXTENSIONS", ".mp4,.avi,.mov,.mkv").split(",")

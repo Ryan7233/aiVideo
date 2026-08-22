@@ -137,3 +137,34 @@ def test_multi_segment_duration_budget_validation():
         assert response.status_code == 422
     finally:
         source.unlink(missing_ok=True)
+
+
+def test_remote_source_download_has_its_size_limit_wired(monkeypatch):
+    """MAX_FILE_SIZE was used but never imported, so every remote URL 500'd."""
+    import asyncio
+
+    from api import main
+    from core import runtime
+
+    captured = {}
+
+    def fake_download(url, destination, max_bytes):
+        captured["max_bytes"] = max_bytes
+        destination.write_bytes(b"placeholder")
+        return destination
+
+    monkeypatch.setattr(runtime, "validate_remote_url", lambda url: url)
+    monkeypatch.setattr(runtime, "download_public_file", fake_download)
+
+    path = asyncio.run(main.materialize_video_source("https://example.com/a.mp4", "sizecheck"))
+    try:
+        assert captured["max_bytes"] == main.MAX_FILE_SIZE > 0
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def test_video_extension_allowlist_is_importable():
+    """Same latent NameError guarded /upload/video's extension check."""
+    from api.main import ALLOWED_VIDEO_EXTENSIONS
+
+    assert ".mp4" in ALLOWED_VIDEO_EXTENSIONS

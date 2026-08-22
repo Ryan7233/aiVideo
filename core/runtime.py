@@ -143,4 +143,24 @@ def download_public_file(url: str, destination: Path, max_bytes: int) -> Path:
     raise ValueError("远程地址重定向次数过多")
 
 
+def materialize_video_source(url: str, prefix: str, max_bytes: int) -> Path:
+    """Resolve a managed local video, or securely download a public remote one.
+
+    Synchronous on purpose: background jobs call it directly, and the API wraps
+    it in a worker thread.
+    """
+    import uuid
+
+    if url.startswith("file://"):
+        return resolve_media_path(url)
+    if not url.lower().startswith(("http://", "https://")):
+        # A managed local path, e.g. the one /upload/video hands back.
+        return resolve_media_path(url)
+
+    validated_url = validate_remote_url(url)
+    destination = DOWNLOAD_DIR / f"{prefix}_{uuid.uuid4().hex}.mp4"
+    download_public_file(validated_url, destination, max_bytes)
+    return destination
+
+
 ensure_runtime_directories()

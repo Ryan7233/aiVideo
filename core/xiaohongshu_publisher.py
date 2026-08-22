@@ -19,41 +19,6 @@ class XiaohongshuPublisher:
         self.access_token = None
         self.user_id = None
         
-    async def authorize(self, auth_code: str) -> Dict[str, Any]:
-        """
-        OAuth授权获取访问令牌
-        
-        Args:
-            auth_code: 授权码
-            
-        Returns:
-            Dict: 授权结果
-        """
-        try:
-            # The official publishing integration is not configured in this project.
-            mock_response = {
-                "access_token": None,
-                "refresh_token": None,
-                "expires_in": 0,
-                "user_id": None,
-                "nickname": None,
-                "avatar": None,
-            }
-
-            logger.info("返回小红书 OAuth 模拟结果，未建立授权会话")
-            return {
-                "status": "simulation",
-                "data": mock_response,
-                "authorized": False,
-                "message": "模拟授权结果：未连接小红书官方 OAuth"
-            }
-            
-        except Exception as e:
-            logger.error(f"小红书授权失败: {str(e)}")
-            return {
-                "status": "error",
-                "message": f"授权失败: {str(e)}"
-            }
     
     async def publish_note(
         self,
@@ -185,89 +150,7 @@ class XiaohongshuPublisher:
                 "message": f"上传失败: {str(e)}"
             }
     
-    async def get_note_stats(self, note_id: str) -> Dict[str, Any]:
-        """
-        获取笔记统计数据
-        
-        Args:
-            note_id: 笔记ID
-            
-        Returns:
-            Dict: 统计数据
-        """
-        try:
-            # 模拟获取统计数据
-            mock_stats = {
-                "note_id": note_id,
-                "view_count": None,
-                "like_count": None,
-                "comment_count": None,
-                "collect_count": None,
-                "share_count": None,
-                "publish_time": None,
-                "status": "unavailable",
-            }
-            
-            return {
-                "status": "simulation",
-                "data": mock_stats,
-                "message": "模拟统计数据，不代表真实笔记表现"
-            }
-            
-        except Exception as e:
-            logger.error(f"获取笔记统计失败: {str(e)}")
-            return {
-                "status": "error",
-                "message": f"获取失败: {str(e)}"
-            }
     
-    async def get_user_profile(self) -> Dict[str, Any]:
-        """
-        获取用户资料
-        
-        Returns:
-            Dict: 用户资料
-        """
-        try:
-            if not self.access_token:
-                return {
-                    "status": "simulation",
-                    "data": {
-                        "user_id": None,
-                        "nickname": None,
-                        "avatar": None,
-                        "follower_count": None,
-                        "following_count": None,
-                        "note_count": None,
-                        "like_count": None,
-                    },
-                    "message": "未接入小红书官方 OAuth，无法读取真实用户资料",
-                }
-            
-            # 模拟获取用户资料
-            mock_profile = {
-                "user_id": self.user_id,
-                "nickname": "AI创作者",
-                "avatar": "https://example.com/avatar.jpg",
-                "description": "AI驱动的内容创作",
-                "follower_count": 1000,
-                "following_count": 500,
-                "note_count": 50,
-                "like_count": 2000
-            }
-            
-            return {
-                "status": "simulation",
-                "data": mock_profile,
-                "message": "模拟用户资料，不代表真实账号"
-            }
-            
-        except Exception as e:
-            logger.error(f"获取用户资料失败: {str(e)}")
-            return {
-                "status": "error",
-                "message": f"获取失败: {str(e)}"
-            }
 
 
 # 全局实例
