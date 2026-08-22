@@ -3,7 +3,6 @@ LLM服务模块 - 支持多种大模型API调用
 """
 import json
 import os
-import asyncio
 import aiohttp
 import random
 from typing import Dict, List, Optional, Any, Tuple
@@ -29,7 +28,7 @@ class LLMService:
             "claude": {
                 "base_url": os.getenv("CLAUDE_API_BASE", "https://api.anthropic.com/v1"),
                 "api_key": os.getenv("CLAUDE_API_KEY", ""),
-                "model": os.getenv("CLAUDE_MODEL", "claude-3-haiku-20240307"),
+                "model": os.getenv("CLAUDE_MODEL", "claude-sonnet-5"),
                 "enabled": configured("CLAUDE_API_KEY")
             },
             "gemini": {
@@ -194,6 +193,22 @@ class LLMService:
         
         return prompt
     
+    def is_configured(self) -> bool:
+        """True when at least one provider has a usable API key."""
+        return self.current_api is not None
+
+    @property
+    def active_model(self) -> Optional[str]:
+        if not self.current_api:
+            return None
+        return self.apis[self.current_api]["model"]
+
+    async def complete(self, prompt: str) -> str:
+        """Send one prompt to the configured provider and return the raw text."""
+        if not self.current_api:
+            raise RuntimeError("未配置任何 LLM API")
+        return await self._call_llm_api(prompt)
+
     async def _call_llm_api(self, prompt: str) -> str:
         """调用LLM API"""
         api_config = self.apis[self.current_api]

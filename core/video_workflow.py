@@ -15,8 +15,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from core.concurrency import run_ffmpeg
 from core.runtime import OUTPUT_DIR, resolve_media_path
-from core.semantic_analysis import get_semantic_analyzer
+from core.semantic_scoring import get_semantic_scorer
 from core.smart_clipping import SmartClippingEngine
 from core.whisper_asr import get_asr_service
 
@@ -120,28 +121,6 @@ def _points_in_window(points: Sequence[Dict[str, Any]], start: float, end: float
     return [point for point in points if start <= float(point.get("timestamp", -1)) < end]
 
 
-def _topic_terms(topic: str) -> List[str]:
-    terms = [term.lower() for term in re.split(r"[\s,，、/|]+", topic) if len(term.strip()) >= 2]
-    return terms or ([topic.strip().lower()] if topic.strip() else [])
-
-
-def _semantic_score(text: str, topic: str, duration: float) -> tuple[float, Dict[str, Any]]:
-    if not text.strip():
-        return 0.0, {"quality": 0.0, "topic_match": 0.0}
-    analyzer = get_semantic_analyzer()
-    quality = analyzer.calculate_content_quality_score(text, duration)
-    terms = _topic_terms(topic)
-    lowered = text.lower()
-    matched = [term for term in terms if term in lowered]
-    topic_match = len(matched) / len(terms) if terms else quality.get("topic_relevance", 0.0)
-    score = min(1.0, quality.get("overall_score", 0.0) * 0.7 + topic_match * 0.3)
-    return score, {
-        "quality": quality.get("overall_score", 0.0),
-        "topic_match": topic_match,
-        "matched_terms": matched,
-    }
-
-
 def _build_candidates(
     duration: float,
     window_duration: float,
@@ -166,28 +145,53 @@ def _build_candidates(
     total_weight = sum(max(0.0, value) for value in active_weights.values()) or 1.0
     active_weights = {key: max(0.0, value) / total_weight for key, value in active_weights.items()}
 
-    candidates: List[Dict[str, Any]] = []
+    # Collect every window first so the semantic pass can score them in one
+    # batch; scoring them one at a time would mean one LLM call per candidate.
+    windows: List[Dict[str, Any]] = []
     for start in starts:
         end = min(duration, start + window_duration)
+        windows.append({
+            "start": start,
+            "end": end,
+            "duration": end - start,
+            "text": " ".join(
+                segment["text"]
+                for segment in transcript
+                if float(segment["start"]) < end and float(segment["end"]) > start
+            ).strip(),
+        })
+
+    semantic_scores = get_semantic_scorer().score_windows(windows, topic)
+
+    candidates: List[Dict[str, Any]] = []
+    for position, window in enumerate(windows):
+        start, end = window["start"], window["end"]
         window_scenes = _points_in_window(scenes, start, end)
         window_motion = _points_in_window(motion, start, end)
         window_audio = _points_in_window(audio, start, end)
-        window_text = " ".join(
-            segment["text"]
-            for segment in transcript
-            if float(segment["start"]) < end and float(segment["end"]) > start
-        ).strip()
+        window_text = window["text"]
 
         ideal_scenes = max(1.0, (end - start) / 8.0)
         scene_density = min(1.0, len(window_scenes) / ideal_scenes)
-        motion_density = min(1.0, len(window_motion) / max(1.0, end - start) * 2.0)
+        # Average the measured motion magnitude rather than counting samples:
+        # the sample count only reflects the fixed sampling rate.
+        motion_density = (
+            sum(float(point.get("activity", 0.0)) for point in window_motion) / len(window_motion)
+            if window_motion
+            else 0.0
+        )
         visual_score = scene_density * 0.65 + motion_density * 0.35
         audio_score = (
             sum(float(point.get("energy", 0.0)) for point in window_audio) / len(window_audio)
             if window_audio
             else 0.0
         )
-        semantic_score, semantic_details = _semantic_score(window_text, topic, end - start)
+        scored = semantic_scores[position]
+        semantic_score = scored.score
+        semantic_details = dict(scored.details)
+        semantic_details["source"] = scored.source
+        if scored.reason:
+            semantic_details["reason"] = scored.reason
         total_score = (
             semantic_score * active_weights["semantic"]
             + visual_score * active_weights["visual"]
@@ -278,7 +282,7 @@ def _select_segments(
 
 
 def _run_ffmpeg(command: List[str], timeout: int = 600) -> None:
-    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    result = run_ffmpeg(command, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(result.stderr[-4000:] or "FFmpeg failed")
 
