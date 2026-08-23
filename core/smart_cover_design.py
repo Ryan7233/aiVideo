@@ -14,7 +14,15 @@ import colorsys
 from collections import Counter
 import subprocess
 import tempfile
+from datetime import datetime
 
+from core.color_palette import (
+    adjust_for_text,
+    complement,
+    dominant_colors as extract_dominant_colors,
+)
+
+from core.fonts import load_font
 logger = logging.getLogger(__name__)
 
 # 尝试导入PIL用于图像处理
@@ -367,7 +375,7 @@ class SmartCoverDesigner:
                 image = image.convert('RGB')
             
             # 提取主要颜色
-            dominant_colors = self._extract_dominant_colors(image)
+            dominant_colors = extract_dominant_colors(image)
             
             # 分析亮度分布
             brightness_analysis = self._analyze_brightness_distribution(image)
@@ -390,38 +398,6 @@ class SmartCoverDesigner:
             logger.error(f"图像特征分析失败: {e}")
             return {}
     
-    def _extract_dominant_colors(self, image: Image.Image, num_colors: int = 5) -> List[Tuple[int, int, int]]:
-        """提取主要颜色"""
-        try:
-            # 缩小图像以提高处理速度
-            image_small = image.resize((150, 150))
-            
-            # 转换为numpy数组
-            img_array = np.array(image_small)
-            pixels = img_array.reshape(-1, 3)
-            
-            # 使用K-means聚类找出主要颜色
-            from sklearn.cluster import KMeans
-            
-            kmeans = KMeans(n_clusters=num_colors, random_state=42, n_init=10)
-            kmeans.fit(pixels)
-            
-            colors = kmeans.cluster_centers_.astype(int)
-            
-            # 按出现频率排序
-            labels = kmeans.labels_
-            label_counts = Counter(labels)
-            
-            sorted_colors = []
-            for label, count in label_counts.most_common():
-                color = tuple(colors[label])
-                sorted_colors.append(color)
-            
-            return sorted_colors
-            
-        except Exception as e:
-            logger.warning(f"主要颜色提取失败，使用默认颜色: {e}")
-            return [(128, 128, 128), (64, 64, 64), (192, 192, 192)]
     
     def _analyze_brightness_distribution(self, image: Image.Image) -> Dict:
         """分析亮度分布"""
@@ -449,7 +425,7 @@ class SmartCoverDesigner:
             img_array = np.array(image)
             
             # 检测主要颜色分布
-            dominant_colors = self._extract_dominant_colors(image, 3)
+            dominant_colors = extract_dominant_colors(image, 3)
             
             # 基于颜色判断内容类型
             green_score = sum(1 for r, g, b in dominant_colors if g > r and g > b)
@@ -550,18 +526,18 @@ class SmartCoverDesigner:
                 if image.mode != 'RGB':
                     image = image.convert('RGB')
                 
-                dominant_colors = self._extract_dominant_colors(image, 3)
+                dominant_colors = extract_dominant_colors(image, 3)
                 
                 if dominant_colors:
                     # 使用最主要的颜色作为主色调
                     main_color = dominant_colors[0]
                     
                     # 调整色彩饱和度和亮度
-                    adjusted_color = self._adjust_color_for_text(main_color)
+                    adjusted_color = adjust_for_text(main_color)
                     base_colors['primary'] = adjusted_color
                     
                     # 生成互补色作为辅助色
-                    complement_color = self._generate_complement_color(main_color)
+                    complement_color = complement(main_color)
                     base_colors['secondary'] = complement_color
             
             return base_colors
@@ -570,48 +546,7 @@ class SmartCoverDesigner:
             logger.error(f"色彩方案提取失败: {e}")
             return self.color_schemes['elegant']
     
-    def _adjust_color_for_text(self, color: Tuple[int, int, int]) -> Tuple[int, int, int]:
-        """调整颜色以适合文本显示"""
-        try:
-            r, g, b = color
-            
-            # 转换到HSV色彩空间
-            h, s, v = colorsys.rgb_to_hsv(r/255, g/255, b/255)
-            
-            # 增加饱和度和亮度以提高可读性
-            s = min(1.0, s * 1.2)
-            v = max(0.4, min(0.8, v))
-            
-            # 转换回RGB
-            r, g, b = colorsys.hsv_to_rgb(h, s, v)
-            
-            return (int(r * 255), int(g * 255), int(b * 255))
-            
-        except Exception:
-            return color
     
-    def _generate_complement_color(self, color: Tuple[int, int, int]) -> Tuple[int, int, int]:
-        """生成互补色"""
-        try:
-            r, g, b = color
-            
-            # 转换到HSV色彩空间
-            h, s, v = colorsys.rgb_to_hsv(r/255, g/255, b/255)
-            
-            # 生成互补色（色相偏移180度）
-            complement_h = (h + 0.5) % 1.0
-            
-            # 调整饱和度和亮度
-            complement_s = max(0.3, s * 0.8)
-            complement_v = max(0.3, v * 0.9)
-            
-            # 转换回RGB
-            r, g, b = colorsys.hsv_to_rgb(complement_h, complement_s, complement_v)
-            
-            return (int(r * 255), int(g * 255), int(b * 255))
-            
-        except Exception:
-            return (128, 128, 128)
     
     def _design_text_layout(self, title: str, color_palette: Dict, design_scheme: Dict) -> Dict:
         """设计文案布局"""
@@ -877,29 +812,9 @@ class SmartCoverDesigner:
             logger.error(f"文本添加失败: {e}")
             return image
     
-    def _load_font(self, size: int) -> ImageFont.ImageFont:
-        """加载字体"""
-        try:
-            # 尝试加载系统字体
-            font_paths = [
-                "/System/Library/Fonts/PingFang.ttc",  # macOS
-                "/System/Library/Fonts/Helvetica.ttc",  # macOS
-                "C:/Windows/Fonts/simhei.ttf",  # Windows
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"  # Linux
-            ]
-            
-            for font_path in font_paths:
-                try:
-                    if Path(font_path).exists():
-                        return ImageFont.truetype(font_path, size)
-                except Exception:
-                    continue
-            
-            # 回退到默认字体
-            return ImageFont.load_default()
-            
-        except Exception:
-            return ImageFont.load_default()
+    def _load_font(self, size: int):
+        """字体加载委托给 core.fonts，那里会真正验证中文渲染能力。"""
+        return load_font(size)
     
     def _wrap_text(self, text: str, font: ImageFont.ImageFont, max_width: float, max_lines: int) -> List[str]:
         """文本换行"""

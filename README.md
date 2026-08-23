@@ -173,6 +173,20 @@ media / jobs / tasks / admin` 分组。此前有 14 个路由在前端、测试�
 现在改成了正常的请求体模型。`tests/test_api_surface.py` 锁定了这套结论——被删的不会悄悄回来、
 被留的不会悄悄消失、每个路由都有 tag、POST 不许用 query 传 body、路由总数只减不增。
 
+### 封面
+
+封面配色可以设成 `theme="auto"`，从实际图片里聚类取色，而不是套用固定主题——此前不管照片
+是什么内容，所有封面都是同一套粉色渐变。取色遵循内置主题的约定：`secondary` 是 `primary`
+的同色系暗色（背景是 primary→secondary 渐变，用互补色会很突兀），互补色只用在小面积
+点缀上。网格也会按图片数量自适应（4 张用 2×2，6 张用 2×3），此前固定 3×3，不足 9 张就会
+在封面下方留一条空白带。
+
+字体解析统一走 `core/fonts.py`，它会**实际渲染一个中文字符**来验证字体可用，而不是只检查
+文件存在。原来的代码把 `/System/Library/Fonts/PingFang.ttc` 写死在第一位，而当前 macOS 上
+这个路径并不存在，于是回退到没有中文字形的位图字体，标题渲染成几个看不清的像素；Linux 上
+回退到 DejaVuSans，能打开但中文是方块。容器里没有中文字体时会打印安装提示
+（`apt-get install -y fonts-noto-cjk`），也可以用 `AIVIDEO_CJK_FONT` 指定。
+
 ### 关于那两对"重复"模块
 
 之前判断 `smart_cover_generator` / `smart_cover_design` 和两个 collage 生成器是重复实现，
@@ -198,6 +212,8 @@ core/smart_clipping.py      真实画面/运动/音频测量
 core/whisper_asr.py         Faster-Whisper 模型缓存与转录
 core/text_tokenizer.py      中英文分词与词典匹配（jieba，缺失时降级）
 core/semantic_scoring.py    候选片段语义评分（LLM 优先，词典规则兜底）
+core/color_palette.py       从图片提取配色（封面渲染与设计共用）
+core/fonts.py               字体解析（验证中文渲染能力，非仅检查文件存在）
 core/concurrency.py         FFmpeg 并发上限
 core/jobs.py                后台任务提交（线程池 / Celery）
 core/job_store.py           SQLite 任务记录

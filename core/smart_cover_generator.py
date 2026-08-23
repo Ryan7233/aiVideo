@@ -10,6 +10,8 @@ from loguru import logger
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 import numpy as np
 from pathlib import Path
+from core.color_palette import palette_from_images
+from core.fonts import load_font
 from core.runtime import OUTPUT_DIR
 import io
 import base64
@@ -66,13 +68,37 @@ class SmartCoverGenerator:
             }
         }
     
+    def _resolve_palette(
+        self,
+        theme: str,
+        images: List[str],
+        custom_config: Dict[str, Any] = None,
+    ) -> Tuple[Dict[str, str], str]:
+        """Pick the colours for this cover.
+
+        An explicit palette in ``custom_config`` wins; ``theme="auto"`` samples
+        the images being composited; anything else is a named preset. The
+        second return value is a preset name, because the rendering helpers
+        branch on it for texture and gradient style.
+        """
+        supplied = (custom_config or {}).get("palette")
+        if isinstance(supplied, dict) and supplied.get("primary"):
+            return {**self.color_themes["pink_gradient"], **supplied}, "custom"
+
+        if theme == "auto":
+            palette = palette_from_images(images)
+            logger.info(f"封面配色取自图片: {palette}")
+            return palette, "custom"
+
+        return self.color_themes.get(theme, self.color_themes["pink_gradient"]), theme
+
     async def generate_cover(
         self,
         images: List[str],
         title: str,
         subtitle: str = "",
-        layout: str = "grid_3x3",
-        theme: str = "pink_gradient",
+        layout: str = "auto",
+        theme: str = "pink_gradient",  # 预设名，或 "auto" 表示从图片取色
         platform: str = "xiaohongshu",
         custom_config: Dict[str, Any] = None
     ) -> Dict[str, Any]:
@@ -100,11 +126,12 @@ class SmartCoverGenerator:
             # 创建高分辨率封面画布
             cover = Image.new('RGB', high_res_size, (255, 255, 255))
             
-            # 获取主题配色
-            colors = self.color_themes.get(theme, self.color_themes["pink_gradient"])
+            # 获取主题配色。theme="auto" 时从实际图片里取色，
+            # 否则每张封面都长得一样，跟内容无关。
+            colors, resolved_theme = self._resolve_palette(theme, images, custom_config)
             
             # 添加高质量渐变背景
-            cover = self._add_premium_background(cover, colors, theme)
+            cover = self._add_premium_background(cover, colors, resolved_theme)
             
             # 加载和预处理图片
             processed_images = []
@@ -125,13 +152,13 @@ class SmartCoverGenerator:
                 }
             
             # 应用真正的拼图布局
-            cover = self._apply_collage_layout(cover, processed_images, layout, colors, theme)
+            cover, grid = self._apply_collage_layout(cover, processed_images, layout, colors, resolved_theme)
             
             # 添加高质量标题
             cover = self._add_premium_titles(cover, title, subtitle, colors, platform)
             
             # 添加拼图装饰效果
-            cover = self._add_collage_effects(cover, colors, theme)
+            cover = self._add_collage_effects(cover, colors, resolved_theme, grid)
             
             # 缩放回目标尺寸（保持高质量）
             final_cover = cover.resize(cover_size, Image.Resampling.LANCZOS)
@@ -165,6 +192,7 @@ class SmartCoverGenerator:
                     "height": cover_size[1],
                     "layout": layout,
                     "theme": theme,
+                    "palette": colors,
                     "platform": platform,
                     "image_count": len(processed_images),
                     "quality": "premium"
@@ -413,12 +441,8 @@ class SmartCoverGenerator:
             cover_width, cover_height = cover.size
             
             # 加载字体
-            try:
-                title_font = ImageFont.truetype("assets/fonts/title.ttf", 48)
-                subtitle_font = ImageFont.truetype("assets/fonts/subtitle.ttf", 28)
-            except:
-                title_font = ImageFont.load_default()
-                subtitle_font = ImageFont.load_default()
+            title_font = load_font(48)
+            subtitle_font = load_font(28)
             
             # 主标题
             if title:
@@ -720,23 +744,36 @@ class SmartCoverGenerator:
             logger.warning(f"图片质量增强失败: {str(e)}")
             return img
 
+    @staticmethod
+    def _grid_for(count: int) -> Tuple[int, int]:
+        """Rows and columns that a given number of images actually fills.
+
+        The default was always 3x3, so anything under nine images left a band
+        of empty background across the cover.
+        """
+        return {
+            1: (1, 1), 2: (1, 2), 3: (1, 3), 4: (2, 2),
+            5: (2, 3), 6: (2, 3), 7: (3, 3), 8: (3, 3),
+        }.get(count, (3, 3))
+
     def _apply_collage_layout(self, cover: Image.Image, images: List[Image.Image], layout: str, colors: Dict[str, str], theme: str) -> Image.Image:
         """应用真正的拼图布局"""
         try:
             if layout == "grid_3x3":
-                return self._create_puzzle_grid(cover, images, 3, 3, colors, theme)
+                return self._create_puzzle_grid(cover, images, 3, 3, colors, theme), (3, 3)
             elif layout == "grid_2x3":
-                return self._create_puzzle_grid(cover, images, 2, 3, colors, theme)
+                return self._create_puzzle_grid(cover, images, 2, 3, colors, theme), (2, 3)
             elif layout == "collage_mixed":
-                return self._create_artistic_collage(cover, images, colors, theme)
+                return self._create_artistic_collage(cover, images, colors, theme), None
             elif layout == "magazine":
-                return self._create_magazine_collage(cover, images, colors, theme)
+                return self._create_magazine_collage(cover, images, colors, theme), None
             else:
-                return self._create_puzzle_grid(cover, images, 3, 3, colors, theme)
-                
+                grid = self._grid_for(len(images))
+                return self._create_puzzle_grid(cover, images, *grid, colors, theme), grid
+
         except Exception as e:
             logger.warning(f"拼图布局应用失败: {str(e)}")
-            return cover
+            return cover, None
 
     def _create_puzzle_grid(self, cover: Image.Image, images: List[Image.Image], rows: int, cols: int, colors: Dict[str, str], theme: str) -> Image.Image:
         """创建真正的拼图网格效果"""
@@ -966,23 +1003,10 @@ class SmartCoverGenerator:
             title_font_size = max(48, cover_width // 15)
             subtitle_font_size = max(28, cover_width // 25)
             
-            # 尝试加载字体
-            try:
-                # 尝试系统字体
-                import platform
-                system = platform.system()
-                if system == "Darwin":  # macOS
-                    title_font = ImageFont.truetype("/System/Library/Fonts/PingFang.ttc", title_font_size)
-                    subtitle_font = ImageFont.truetype("/System/Library/Fonts/PingFang.ttc", subtitle_font_size)
-                elif system == "Windows":
-                    title_font = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", title_font_size)
-                    subtitle_font = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", subtitle_font_size)
-                else:  # Linux
-                    title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", title_font_size)
-                    subtitle_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", subtitle_font_size)
-            except:
-                title_font = ImageFont.load_default()
-                subtitle_font = ImageFont.load_default()
+            # 字体解析交给 core.fonts：它会验证字体真的能渲染中文，
+            # 而不是只检查文件存在（DejaVuSans 能打开，但中文是方块）。
+            title_font = load_font(title_font_size)
+            subtitle_font = load_font(subtitle_font_size)
             
             # 主标题
             if title:
@@ -1036,27 +1060,32 @@ class SmartCoverGenerator:
             logger.warning(f"高质量标题添加失败: {str(e)}")
             return cover
 
-    def _add_collage_effects(self, cover: Image.Image, colors: Dict[str, str], theme: str) -> Image.Image:
+    def _add_collage_effects(
+        self,
+        cover: Image.Image,
+        colors: Dict[str, str],
+        theme: str,
+        grid: Optional[Tuple[int, int]] = None,
+    ) -> Image.Image:
         """添加拼图装饰效果"""
         try:
             draw = ImageDraw.Draw(cover)
             cover_width, cover_height = cover.size
-            
-            # 添加拼图连接线效果
+
+            # 连接线是格子之间的缝隙线，必须跟随实际网格。写死在 1/3、2/3
+            # 只对 3x3 成立，网格变了就会横穿图片。
             accent_color = (*self._hex_to_rgb(colors["accent"]), 100)
-            
-            # 在图片之间添加连接线
             line_width = max(2, min(cover_width, cover_height) // 200)
-            
-            # 水平连接线
-            for y in [cover_height // 3, cover_height * 2 // 3]:
-                draw.line([(cover_width // 10, y), (cover_width * 9 // 10, y)], 
-                         fill=accent_color, width=line_width)
-            
-            # 垂直连接线
-            for x in [cover_width // 3, cover_width * 2 // 3]:
-                draw.line([(x, cover_height // 5), (x, cover_height * 4 // 5)], 
-                         fill=accent_color, width=line_width)
+
+            rows, cols = grid if grid else (0, 0)
+            for index in range(1, rows):
+                y = cover_height * index // rows
+                draw.line([(cover_width // 10, y), (cover_width * 9 // 10, y)],
+                          fill=accent_color, width=line_width)
+            for index in range(1, cols):
+                x = cover_width * index // cols
+                draw.line([(x, cover_height // 5), (x, cover_height * 4 // 5)],
+                          fill=accent_color, width=line_width)
             
             # 添加装饰性元素
             self._add_decorative_dots(cover, colors, theme)

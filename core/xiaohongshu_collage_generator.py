@@ -7,6 +7,7 @@ import json
 import time
 import uuid
 from typing import Dict, List, Any, Optional, Tuple
+from core.fonts import load_font
 from loguru import logger
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
 import numpy as np
@@ -148,38 +149,22 @@ class XiaohongshuCollageGenerator:
             
         return font_paths
     
-    def _get_font(self, size: int, weight: str = "normal") -> ImageFont.FreeTypeFont:
-        """获取字体对象"""
-        try:
-            # 用户自定义优先
-            if getattr(self, 'font_paths', None) and isinstance(self.font_paths, dict):
+    def _get_font(self, size: int, font_type: str = "chinese"):
+        """字体加载委托给 core.fonts。
+
+        原实现按名字挑字体（PingFang 当中文、Helvetica 当英文），但 PingFang
+        在当前 macOS 上并不存在，于是中文标题落到 Helvetica 上渲染成方块。
+        显式指定的字体仍然优先。
+        """
+        override = getattr(self, "config_font_override", None)
+        if override:
+            try:
+                from PIL import ImageFont
+
+                return ImageFont.truetype(override, size)
+            except Exception:
                 pass
-            # 覆盖路径
-            if hasattr(self, 'config_font_override') and self.config_font_override:
-                try:
-                    return ImageFont.truetype(self.config_font_override, size)
-                except Exception:
-                    pass
-            # 优先使用中文字体
-            if "chinese" in self.font_paths:
-                path = self.font_paths["chinese"]
-                if path.lower().endswith('.ttc'):
-                    for idx in (0,1,2,3):
-                        try:
-                            return ImageFont.truetype(path, size, index=idx)
-                        except Exception:
-                            continue
-                else:
-                    return ImageFont.truetype(path, size)
-            elif "unicode" in self.font_paths:
-                return ImageFont.truetype(self.font_paths["unicode"], size)
-            elif "english" in self.font_paths:
-                return ImageFont.truetype(self.font_paths["english"], size)
-            else:
-                return ImageFont.load_default()
-        except Exception as e:
-            logger.warning(f"字体加载失败: {e}")
-            return ImageFont.load_default()
+        return load_font(size, prefer_cjk=font_type != "english")
     
     async def generate_xiaohongshu_collage(
         self,

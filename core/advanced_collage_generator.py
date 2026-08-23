@@ -11,6 +11,7 @@ from typing import List, Dict, Tuple, Optional, Any
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 import numpy as np
+from core.fonts import load_font
 from loguru import logger
 
 class AdvancedCollageGenerator:
@@ -55,35 +56,9 @@ class AdvancedCollageGenerator:
                 font_paths.append(fp)
         return font_paths
 
-    def _load_font(self, size: int) -> ImageFont.FreeTypeFont:
-        """按优先顺序加载最适合的中文字体，避免乱码。"""
-        # 优先使用已经发现的可用字体路径
-        candidates = list(self.font_paths)
-        # 如果未找到，尝试常见中文字体路径
-        if not candidates:
-            candidates = [
-                "/System/Library/Fonts/PingFang.ttc",
-                "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-                "C:/Windows/Fonts/msyh.ttc",
-                "C:/Windows/Fonts/arialuni.ttf",
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            ]
-        # 逐个尝试加载（.ttc 需要兼容索引）
-        for path in candidates:
-            try:
-                if path.lower().endswith('.ttc'):
-                    # 尝试多个索引（不同字族）
-                    for idx in (0, 1, 2, 3):
-                        try:
-                            return ImageFont.truetype(path, size=size, index=idx)
-                        except Exception:
-                            continue
-                else:
-                    return ImageFont.truetype(path, size=size)
-            except Exception:
-                continue
-        # 最后回退
-        return ImageFont.load_default()
+    def _load_font(self, size: int):
+        """字体加载委托给 core.fonts，那里会真正验证中文渲染能力。"""
+        return load_font(size)
     
     async def generate_advanced_collage(
         self,
