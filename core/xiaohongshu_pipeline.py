@@ -3,13 +3,11 @@
 面向旅行博主的智能内容生成系统
 """
 
-import json
 import re
 import logging
-from typing import List, Dict, Tuple, Optional, Union
+from typing import List, Dict
 from pathlib import Path
 from datetime import datetime
-import hashlib
 import random
 
 logger = logging.getLogger(__name__)
@@ -592,7 +590,6 @@ class XiaohongshuDraftGenerator:
         try:
             sections = storyline.get('sections', [])
             tips = storyline.get('tips', [])
-            costs = storyline.get('costs', {})
             
             paragraphs = []
             

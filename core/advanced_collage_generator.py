@@ -3,14 +3,11 @@
 """
 import os
 import io
-import json
 import base64
 import math
 import random
-from typing import List, Dict, Tuple, Optional, Any
-from pathlib import Path
+from typing import List, Dict, Tuple, Any
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
-import numpy as np
 from core.fonts import load_font
 from loguru import logger
 
@@ -84,7 +81,6 @@ class AdvancedCollageGenerator:
             
             # 创建画布
             canvas = Image.new('RGB', canvas_size, (255, 255, 255))
-            draw = ImageDraw.Draw(canvas)
             
             # 根据布局类型生成拼图
             if layout_type == "dynamic":

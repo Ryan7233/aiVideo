@@ -3,19 +3,16 @@
 实现拼图封面生成、模板应用、文案叠加等功能
 """
 
-import json
 import time
 from typing import Dict, List, Any, Optional, Tuple
 from loguru import logger
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
 import numpy as np
-from pathlib import Path
 from core.color_palette import palette_from_images
 from core.fonts import load_font
 from core.runtime import OUTPUT_DIR
 import io
 import base64
-import math
 
 
 class SmartCoverGenerator:
@@ -307,7 +304,6 @@ class SmartCoverGenerator:
         """应用混合拼贴布局"""
         try:
             cover_width, cover_height = cover.size
-            spacing = template["spacing"]
             
             # 预定义的混合布局位置（相对坐标）
             positions = [
@@ -628,8 +624,6 @@ class SmartCoverGenerator:
             polaroid = Image.new('RGBA', (width, height), (255, 255, 255, 255))
             
             # 添加底部文字区域（宝丽来特色）
-            draw = ImageDraw.Draw(polaroid)
-            text_area_height = int(height * 0.2)
             
             # 可以在这里添加一些装饰或文字
             # draw.rectangle([10, height - text_area_height, width - 10, height - 10], outline=(200, 200, 200))

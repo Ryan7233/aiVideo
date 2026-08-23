@@ -3,11 +3,9 @@
 实现小红书内容自动发布功能
 """
 
-import json
 import time
 from typing import Dict, List, Any, Optional
 from loguru import logger
-import requests
 from pathlib import Path
 
 

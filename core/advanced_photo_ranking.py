@@ -3,13 +3,10 @@
 集成CLIP模型、美学评分、重复检测、主体跟随
 """
 
-import cv2
 import numpy as np
 import logging
-from typing import List, Dict, Tuple, Optional, Set
+from typing import List, Dict, Optional
 from pathlib import Path
-import hashlib
-import json
 from sklearn.metrics.pairwise import cosine_similarity
 from collections import defaultdict
 import random
@@ -27,13 +24,11 @@ except ImportError:
     CLIP_AVAILABLE = False
     logger.warning("CLIP模型不可用，将使用传统方法")
 
-# 尝试导入图像处理库
-try:
-    import cv2
-    CV2_AVAILABLE = True
-except ImportError:
-    CV2_AVAILABLE = False
-    logger.warning("OpenCV不可用，某些功能将受限")
+# Image operations come from core.imaging (numpy/Pillow/SciPy) rather than
+# OpenCV, whose bundled FFmpeg libraries clash with PyAV's.
+from core import imaging
+
+CV2_AVAILABLE = True
 
 
 class AdvancedPhotoRankingService:
@@ -164,7 +159,7 @@ class AdvancedPhotoRankingService:
                 }
             
             # 读取图像
-            image = cv2.imread(photo_path)
+            image = imaging.imread_bgr(photo_path)
             if image is None:
                 logger.warning(f"无法读取图像: {photo_path}")
                 return None
@@ -205,9 +200,9 @@ class AdvancedPhotoRankingService:
         """计算图像感知哈希"""
         try:
             # 缩放到8x8
-            small = cv2.resize(image, (8, 8))
+            small = imaging.resize(image, (8, 8))
             # 转为灰度
-            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            gray = imaging.to_gray(small)
             # 计算平均值
             avg = gray.mean()
             # 生成哈希
@@ -222,11 +217,6 @@ class AdvancedPhotoRankingService:
     def _extract_color_features(self, image: np.ndarray) -> Dict:
         """提取颜色特征"""
         try:
-            # 颜色直方图
-            hist_b = cv2.calcHist([image], [0], None, [256], [0, 256])
-            hist_g = cv2.calcHist([image], [1], None, [256], [0, 256])
-            hist_r = cv2.calcHist([image], [2], None, [256], [0, 256])
-            
             # 主要颜色
             dominant_color = image.reshape(-1, 3).mean(axis=0)
             
@@ -236,8 +226,8 @@ class AdvancedPhotoRankingService:
             return {
                 'dominant_color': dominant_color.tolist(),
                 'color_variance': color_std.tolist(),
-                'brightness': float(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).mean()),
-                'contrast': float(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).std())
+                'brightness': float(imaging.to_gray(image).mean()),
+                'contrast': float(imaging.to_gray(image).std())
             }
         except Exception:
             return {'brightness': 128, 'contrast': 50}
@@ -245,11 +235,11 @@ class AdvancedPhotoRankingService:
     def _extract_texture_features(self, image: np.ndarray) -> Dict:
         """提取纹理特征"""
         try:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            gray = imaging.to_gray(image)
             
             # 计算梯度
-            grad_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-            grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+            grad_x = imaging.sobel(gray, 1, 0)
+            grad_y = imaging.sobel(gray, 0, 1)
             
             # 纹理复杂度
             texture_complexity = np.sqrt(grad_x**2 + grad_y**2).mean()
@@ -264,8 +254,8 @@ class AdvancedPhotoRankingService:
     def _extract_edge_features(self, image: np.ndarray) -> Dict:
         """提取边缘特征"""
         try:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 50, 150)
+            gray = imaging.to_gray(image)
+            edges = imaging.canny(gray, 50, 150)
             
             # 边缘密度
             edge_density = np.sum(edges > 0) / edges.size
@@ -702,7 +692,6 @@ class AdvancedPhotoRankingService:
             
             # 根据上下文调整
             style = context.get('style', '')
-            city = context.get('city', '')
             
             if style == '美食' and 'food' in content_scores:
                 relevance_score = content_scores['food']

@@ -154,7 +154,7 @@ class ServiceMonitor:
     def print_report(self, report: Dict[str, Any]):
         """打印监控报告"""
         print(f"\n{'='*60}")
-        print(f"📊 AI Video Clipper 监控报告")
+        print("📊 AI Video Clipper 监控报告")
         print(f"📅 时间: {report['timestamp']}")
         print(f"{'='*60}")
         
@@ -170,7 +170,7 @@ class ServiceMonitor:
         # 系统资源
         sys_stats = report['system_stats']
         if 'error' not in sys_stats:
-            print(f"\n💻 系统资源:")
+            print("\n💻 系统资源:")
             print(f"   CPU使用率: {sys_stats['cpu_percent']}%")
             print(f"   内存使用率: {sys_stats['memory_percent']}% ({sys_stats['memory_used_gb']}GB / {sys_stats['memory_total_gb']}GB)")
             print(f"   磁盘使用率: {sys_stats['disk_percent']}% ({sys_stats['disk_used_gb']}GB / {sys_stats['disk_total_gb']}GB)")
@@ -185,14 +185,14 @@ class ServiceMonitor:
         # 日志文件
         logs = report['log_files']
         if 'error' not in logs:
-            print(f"\n📝 日志文件:")
+            print("\n📝 日志文件:")
             for name, info in logs['log_files'].items():
                 print(f"   {name}: {info['size_mb']}MB (修改时间: {info['modified']})")
         
         # 输出文件
         outputs = report['output_files']
         if 'error' not in outputs:
-            print(f"\n📹 输出文件:")
+            print("\n📹 输出文件:")
             print(f"   视频数量: {outputs['video_count']}")
             print(f"   总大小: {outputs['total_size_mb']}MB")
             for video in outputs['videos'][:5]:  # 只显示前5个

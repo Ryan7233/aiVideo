@@ -38,9 +38,11 @@ faster-whisper>=1.0.1,<2.0.0
 jieba>=0.42.1,<1.0.0
 
 # --- imaging & analysis ---
-# headless: this is a server, nothing calls cv2.imshow, and the GUI build
-# needs libGL which the slim images do not ship.
-opencv-python-headless>=4.8.1,<5.0.0
+# No OpenCV. It bundles its own FFmpeg shared libraries, and faster-whisper
+# pulls in PyAV, which bundles a different major version; loading both put two
+# copies of libavdevice in one process and macOS warned about duplicate
+# Objective-C classes and "mysterious crashes". The ten calls that needed it
+# now live in core/imaging.py on numpy/Pillow/SciPy, which were already here.
 Pillow>=10.0.0,<12.0.0
 numpy>=1.24.3,<3.0.0
 scikit-learn>=1.3.0,<2.0.0

@@ -3,20 +3,15 @@
 帧选 + 文案叠字模板（自动取主色、加描边）
 """
 
-import cv2
 import numpy as np
 import logging
 from typing import List, Dict, Tuple, Optional
 from pathlib import Path
 from core.runtime import OUTPUT_DIR
-import json
-import colorsys
-from collections import Counter
-import subprocess
-import tempfile
 from datetime import datetime
 
 from core.concurrency import run_ffmpeg
+from core import imaging
 from core.color_palette import (
     adjust_for_text,
     complement,
@@ -28,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # 尝试导入PIL用于图像处理
 try:
-    from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+    from PIL import Image, ImageDraw, ImageFont, ImageFilter
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
@@ -313,8 +308,8 @@ class SmartCoverDesigner:
             img_array = np.array(image)
             
             # 计算清晰度（基于梯度）
-            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-            laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+            gray = imaging.to_gray(img_array, source="RGB")
+            laplacian_var = imaging.laplacian_variance(gray)
             sharpness_score = min(laplacian_var / 1000, 1.0)
             
             # 计算亮度分布
@@ -345,8 +340,8 @@ class SmartCoverDesigner:
             title_region = img_array[title_y_start:title_y_end, :]
             
             # 计算区域的视觉复杂度
-            gray_region = cv2.cvtColor(title_region, cv2.COLOR_RGB2GRAY)
-            complexity = cv2.Laplacian(gray_region, cv2.CV_64F).var()
+            gray_region = imaging.to_gray(title_region, source="RGB")
+            complexity = imaging.laplacian_variance(gray_region)
             
             # 复杂度适中最适合放文字
             optimal_complexity = 500
@@ -423,7 +418,6 @@ class SmartCoverDesigner:
         """检测图像内容类型"""
         try:
             # 简单的内容类型检测
-            img_array = np.array(image)
             
             # 检测主要颜色分布
             dominant_colors = extract_dominant_colors(image, 3)
@@ -450,10 +444,10 @@ class SmartCoverDesigner:
         try:
             width, height = image.size
             img_array = np.array(image)
-            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            gray = imaging.to_gray(img_array, source="RGB")
             
             # 检测边缘
-            edges = cv2.Canny(gray, 50, 150)
+            edges = imaging.canny(gray, 50, 150)
             
             # 分析边缘分布
             edge_density_top = np.sum(edges[:height//3, :]) / (width * height // 3)
@@ -901,7 +895,6 @@ class SmartCoverDesigner:
             
             padding = bg_config.get('padding', 20)
             bg_color = bg_config.get('color', (0, 0, 0, 128))
-            border_radius = bg_config.get('border_radius', 10)
             
             # 计算背景区域
             min_x = min(pos[0] for pos in positions) - padding
@@ -915,7 +908,6 @@ class SmartCoverDesigner:
             # 绘制圆角矩形背景
             if len(bg_color) == 4:  # RGBA
                 # 创建临时图像用于透明度
-                temp_img = Image.new('RGBA', (max_x - min_x, max_y - min_y), bg_color)
                 # 这里简化处理，直接绘制矩形
                 draw.rectangle([min_x, min_y, max_x, max_y], fill=bg_color[:3])
             else:

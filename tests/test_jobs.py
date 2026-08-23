@@ -307,3 +307,70 @@ class TestStatusTransitions:
         assert job_store.mark_running(job_id) is True
         assert job_store.mark_running(job_id) is True
         assert job_store.get_job(job_id)["status"] == job_store.RUNNING
+
+
+class TestDispatchFailure:
+    """A broker that is down must not leave orphan records.
+
+    submit() created the row and then dispatched. When the broker was
+    unreachable the exception propagated, leaving a row stuck in "pending"
+    with no finished_at and no error -- one more every time the broker
+    flapped, and the caller never learned the id.
+    """
+
+    @pytest.fixture
+    def broken_broker(self, monkeypatch):
+        monkeypatch.setenv("JOB_BACKEND", "celery")
+
+        class Unreachable:
+            def delay(self, *args, **kwargs):
+                raise ConnectionError("Error 61 connecting to localhost:6379.")
+
+        import worker.tasks
+
+        monkeypatch.setattr(worker.tasks, "run_registered_job", Unreachable())
+
+    def test_failed_dispatch_is_recorded_not_orphaned(self, broken_broker):
+        with pytest.raises(jobs.JobDispatchError) as caught:
+            jobs.submit("multi_segment_clipping", {"video_path": "x.mp4"})
+
+        job = job_store.get_job(caught.value.job_id)
+        assert job["status"] == job_store.FAILED
+        assert job["finished_at"] is not None
+        assert "投递失败" in job["error"]
+        assert "ConnectionError" in job["error"]
+
+    def test_no_pending_rows_are_left_behind(self, broken_broker):
+        for _ in range(3):
+            with pytest.raises(jobs.JobDispatchError):
+                jobs.submit("multi_segment_clipping", {"video_path": "x.mp4"})
+
+        assert job_store.list_jobs(status=job_store.PENDING) == []
+        assert len(job_store.list_jobs(status=job_store.FAILED)) == 3
+
+    def test_the_error_carries_the_job_id(self, broken_broker):
+        with pytest.raises(jobs.JobDispatchError) as caught:
+            jobs.submit("multi_segment_clipping", {})
+        assert job_store.get_job(caught.value.job_id) is not None
+
+    def test_route_returns_503_with_the_job_id(self, broken_broker, client):
+        response = client.post(
+            "/jobs", json={"kind": "multi_segment_clipping", "params": {}}
+        )
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert detail["job_id"]
+        assert job_store.get_job(detail["job_id"])["status"] == job_store.FAILED
+
+    def test_a_broken_thread_pool_is_handled_the_same_way(self, monkeypatch):
+        monkeypatch.setenv("JOB_BACKEND", "thread")
+
+        class DeadPool:
+            def submit(self, *args, **kwargs):
+                raise RuntimeError("cannot schedule new futures after shutdown")
+
+        monkeypatch.setattr(jobs, "_get_executor", lambda: DeadPool())
+
+        with pytest.raises(jobs.JobDispatchError) as caught:
+            jobs.submit("multi_segment_clipping", {})
+        assert job_store.get_job(caught.value.job_id)["status"] == job_store.FAILED

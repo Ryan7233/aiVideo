@@ -5,7 +5,6 @@ AI Video Clipper API 服务启动脚本
 
 import uvicorn
 import sys
-import os
 from pathlib import Path
 
 # Add project root to Python path

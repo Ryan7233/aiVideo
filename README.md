@@ -196,6 +196,17 @@ media / jobs / tasks / admin` 分组。此前有 14 个路由在前端、测试�
 现在改成了正常的请求体模型。`tests/test_api_surface.py` 锁定了这套结论——被删的不会悄悄回来、
 被留的不会悄悄消失、每个路由都有 tag、POST 不许用 query 传 body、路由总数只减不增。
 
+### 图像处理依赖
+
+不使用 OpenCV。它自带一套 FFmpeg 动态库，而 faster-whisper 依赖的 PyAV 自带另一个大版本，
+同时加载会让一个进程里出现两份 `libavdevice`，macOS 明确警告重复的 Objective-C 类和
+"mysterious crashes"。项目实际只用到 OpenCV 的 10 个调用，已全部改写到 `core/imaging.py`，
+基于本来就有的 numpy / Pillow / SciPy。
+
+和 OpenCV 的实测差异（FFmpeg 测试图案）：读图**完全一致**，灰度差 ≤1 级，Sobel 和拉普拉斯
+方差在 5% 以内，边缘密度在 0.63–1.17 倍之间——调用方用它做照片之间的相对比较，不是绝对值。
+`tests/test_imaging.py` 里有对照测试，装了 OpenCV 时会自动运行。
+
 ### 封面
 
 封面配色可以设成 `theme="auto"`，从实际图片里聚类取色，而不是套用固定主题——此前不管照片
@@ -255,9 +266,14 @@ tests/                      API 表面、安全边界、中文评分、任务流
 pip install -r requirements-dev.txt   # 运行时依赖 + 测试依赖
 pytest -q
 python -m compileall -q api core routers worker tests
+python -m pyflakes api core routers worker tests scripts *.py
 node --check frontend/script.js
 bash -n scripts/*.sh
 ```
+
+Pyflakes 在 CI 里是**阻塞**检查（未定义名、未使用的导入和局部变量），目前是 0 条诊断。
+之前那三个 `NameError`（`MAX_FILE_SIZE`、`ALLOWED_VIDEO_EXTENSIONS`、`datetime`）都属于
+它能直接发现的类型。
 
 测试套件会生成一段短视频并实际执行 FFmpeg 主流程，不依赖仓库中的媒体样本。
 `tests/test_semantic_analysis.py` 锁定中文评分的基本不变量（有效内容必须高于口水话、

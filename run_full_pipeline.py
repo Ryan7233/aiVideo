@@ -2,8 +2,7 @@ import json
 import requests
 import os
 import time
-from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from loguru import logger
 from dotenv import load_dotenv
 
@@ -12,7 +11,7 @@ load_dotenv()
 
 # Import configuration
 from core.config import (
-    GEMINI_API_BASE, CUT_API_BASE, MIN_CLIP_DURATION, MAX_CLIP_DURATION
+    GEMINI_API_BASE, CUT_API_BASE
 )
 from core.runtime import LOG_DIR, ensure_runtime_directories
 

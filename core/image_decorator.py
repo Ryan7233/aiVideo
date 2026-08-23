@@ -3,12 +3,10 @@
 实现图片添加小图标、文案叠加、滤镜效果等功能
 """
 
-import json
 import time
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Tuple
 from loguru import logger
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
-import numpy as np
 from pathlib import Path
 from core.runtime import OUTPUT_DIR
 import io

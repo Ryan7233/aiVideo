@@ -7,12 +7,11 @@ import json
 import logging
 import zipfile
 import shutil
-from typing import List, Dict, Optional
+from typing import List, Dict
 from pathlib import Path
 from core.runtime import OUTPUT_DIR
 from datetime import datetime
 import hashlib
-import uuid
 
 logger = logging.getLogger(__name__)
 

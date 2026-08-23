@@ -31,9 +31,11 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Python tests
         run: pytest -q
-      - name: Static syntax checks
+      - name: Static checks
         run: |
           python -m compileall -q api core routers worker tests
+          # Blocking: undefined names, unused imports, dead locals.
+          python -m pyflakes api core routers worker tests scripts *.py
           node --check frontend/script.js
           node --check frontend/llm-integration.js
           for file in scripts/*.sh; do bash -n "$file"; done

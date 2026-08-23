@@ -4,8 +4,7 @@
 """
 
 import logging
-from typing import List, Dict, Tuple, Optional
-from pathlib import Path
+from typing import List, Dict
 
 from .smart_clipping import SmartClippingEngine
 from .semantic_analysis import get_semantic_analyzer, analyze_transcription_semantics

@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from core import job_store
-from core.jobs import backend_name, registered_kinds, submit
+from core.jobs import JobDispatchError, backend_name, registered_kinds, submit
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,13 @@ async def create_job(submission: JobSubmission) -> Dict[str, Any]:
         job_id = submit(submission.kind, submission.params)
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
+    except JobDispatchError as exc:
+        # The record exists and is marked failed; hand back its id so the
+        # caller can look up what happened instead of losing the attempt.
+        raise HTTPException(
+            status_code=503,
+            detail={"message": str(exc), "job_id": exc.job_id},
+        ) from None
     except Exception as exc:
         logger.exception("Failed to submit job")
         raise HTTPException(status_code=500, detail=f"任务提交失败: {exc}") from None

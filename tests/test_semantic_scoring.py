@@ -12,7 +12,7 @@ import json
 import pytest
 
 from core import semantic_scoring
-from core.semantic_scoring import SemanticScorer, WindowScore, rule_score, topic_terms
+from core.semantic_scoring import SemanticScorer, rule_score, topic_terms
 
 
 WINDOWS = [

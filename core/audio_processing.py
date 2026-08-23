@@ -6,14 +6,11 @@
 import logging
 import numpy as np
 import subprocess
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Optional
 from pathlib import Path
 from core.runtime import OUTPUT_DIR
 import json
-import tempfile
 import librosa
-from scipy import signal
-import random
 
 from core.concurrency import run_ffmpeg
 
@@ -21,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 # 尝试导入音频处理库
 try:
-    import librosa
     import soundfile as sf
     AUDIO_LIBS_AVAILABLE = True
     logger.info("音频处理库可用")
@@ -212,9 +208,6 @@ class AudioProcessingService:
             # 节拍检测
             tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
             
-            # 频率分析
-            stft = librosa.stft(y)
-            magnitude = np.abs(stft)
             
             # 语音活动检测
             speech_segments = self._detect_speech_segments(y, sr)
@@ -586,7 +579,6 @@ class AudioProcessingService:
     def _generate_simple_bgm_with_ffmpeg(self, bgm_info: Dict, duration: float, output_path: str) -> Optional[str]:
         """使用FFmpeg生成简单BGM"""
         try:
-            tempo = bgm_info['tempo']
             energy = bgm_info['energy']
             
             # 生成简单的音调

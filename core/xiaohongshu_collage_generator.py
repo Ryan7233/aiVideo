@@ -3,19 +3,17 @@
 实现专业级图片拼接、文案编辑、高清导出功能
 """
 
-import json
 import time
 import uuid
 from typing import Dict, List, Any, Optional, Tuple
 from core.fonts import load_font
 from loguru import logger
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 import numpy as np
 from pathlib import Path
 from core.runtime import OUTPUT_DIR, resolve_media_path
 import io
 import base64
-import math
 import os
 from dataclasses import dataclass
 

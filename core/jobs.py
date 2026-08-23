@@ -25,6 +25,18 @@ logger = logging.getLogger(__name__)
 
 JobHandler = Callable[[Dict[str, Any], str], Dict[str, Any]]
 
+class JobDispatchError(RuntimeError):
+    """Raised when a job could not be handed to its backend.
+
+    Carries the job id so the caller can report it: the record exists and is
+    marked failed, which is what an operator needs to see a broker outage.
+    """
+
+    def __init__(self, message: str, job_id: str):
+        super().__init__(message)
+        self.job_id = job_id
+
+
 _handlers: Dict[str, JobHandler] = {}
 _executor: Optional[ThreadPoolExecutor] = None
 
@@ -99,18 +111,26 @@ def submit(kind: str, params: Dict[str, Any]) -> str:
     backend = backend_name()
     job_id = job_store.create_job(kind, params, backend=backend)
 
-    if backend == "celery":
-        from worker.tasks import run_registered_job
+    try:
+        if backend == "celery":
+            from worker.tasks import run_registered_job
 
-        async_result = run_registered_job.delay(kind, params, job_id)
-        # Record the dispatch id only. The worker owns the status: a task that
-        # failed or finished before this line must not be pulled back to
-        # "running", which would leave the poller waiting forever.
-        job_store.set_external_id(job_id, async_result.id)
-        logger.info("Dispatched job %s to Celery task %s", job_id, async_result.id)
-    else:
-        _get_executor().submit(run_job, kind, params, job_id)
-        logger.info("Queued job %s on the local thread pool", job_id)
+            async_result = run_registered_job.delay(kind, params, job_id)
+            # Record the dispatch id only. The worker owns the status: a task
+            # that failed or finished before this line must not be pulled back
+            # to "running", which would leave the poller waiting forever.
+            job_store.set_external_id(job_id, async_result.id)
+            logger.info("Dispatched job %s to Celery task %s", job_id, async_result.id)
+        else:
+            _get_executor().submit(run_job, kind, params, job_id)
+            logger.info("Queued job %s on the local thread pool", job_id)
+    except Exception as exc:
+        # Dispatch failed -- an unreachable broker, a shut-down pool. Nothing
+        # will ever pick this row up, so close it out here rather than leaving
+        # a pending record that accumulates every time the broker flaps.
+        logger.exception("Failed to dispatch job %s (%s)", job_id, kind)
+        job_store.mark_failed(job_id, f"任务投递失败（{backend}）: {type(exc).__name__}: {exc}")
+        raise JobDispatchError(f"任务投递失败: {exc}", job_id=job_id) from exc
 
     return job_id
 

@@ -13,6 +13,7 @@ ASR_INTEGRATION_TESTS=1 to allow downloading the tiny model.
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -30,14 +31,48 @@ SCRIPT = (
 # transcribed Mandarin into the wrong script.
 TRADITIONAL_ONLY = set("這個內容運營發時間點鐘臺灣體讚樹術書總結學習實現準備")
 
+# Below this the clip is too short to say anything about segmentation.
+MIN_SPEECH_SECONDS = 5.0
+
 
 def _requirements_met():
-    if not shutil.which("say") or not shutil.which("ffmpeg"):
+    if not shutil.which("say") or not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         return False, "needs macOS `say` and FFmpeg to synthesise speech"
     model_cached = (MODEL_DIR / "whisper").is_dir() and any((MODEL_DIR / "whisper").iterdir())
     if not model_cached and os.getenv("ASR_INTEGRATION_TESTS", "") not in {"1", "true"}:
         return False, "no cached Whisper model; set ASR_INTEGRATION_TESTS=1 to download"
     return True, ""
+
+
+def _media_duration(path) -> float:
+    """Duration in seconds, or 0.0 if the file is unreadable or empty.
+
+    `say` exits 0 even for a voice that does not exist, writing a header-only
+    AIFF; ffprobe then reports N/A. Passing that on to FFmpeg made the whole
+    fixture explode instead of skipping, so every step is measured.
+    """
+    try:
+        completed = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        if completed.returncode != 0:
+            return 0.0
+        return float(completed.stdout.strip())
+    except (ValueError, OSError, subprocess.SubprocessError):
+        return 0.0
+
+
+def _synthesise(voice: str, script_path, out_path) -> float:
+    """Speak the script to a file and report how long the audio actually is."""
+    result = subprocess.run(
+        ["say", "-v", voice, "-f", str(script_path), "-o", str(out_path)],
+        capture_output=True,
+    )
+    if result.returncode != 0 or not Path(out_path).is_file():
+        return 0.0
+    return _media_duration(out_path)
 
 
 @pytest.fixture(scope="module")
@@ -51,31 +86,41 @@ def spoken_video(tmp_path_factory):
     script.write_text(SCRIPT, encoding="utf-8")
     aiff, wav = tmp / "speech.aiff", tmp / "speech.wav"
 
-    voice = None
-    for candidate in ("Tingting", "Meijia", "Eddy"):
-        if subprocess.run(["say", "-v", candidate, "-o", str(aiff), "测试"],
-                          capture_output=True).returncode == 0:
-            voice = candidate
+    # Pick a voice by whether it produces real audio, not by exit code.
+    spoken = 0.0
+    for candidate in ("Tingting", "Meijia", "Sinji", "Eddy", "Flo", "Li-mu"):
+        spoken = _synthesise(candidate, script, aiff)
+        if spoken >= MIN_SPEECH_SECONDS:
             break
-    if voice is None:
-        pytest.skip("no Chinese TTS voice installed")
+    if spoken < MIN_SPEECH_SECONDS:
+        pytest.skip(
+            "no Chinese TTS voice produced usable audio "
+            f"(best was {spoken:.2f}s, need {MIN_SPEECH_SECONDS}s)"
+        )
 
-    subprocess.run(["say", "-v", voice, "-f", str(script), "-o", str(aiff)],
-                   check=True, capture_output=True)
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(aiff),
-                    "-ar", "16000", "-ac", "1", str(wav)], check=True, capture_output=True)
-
-    duration = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(wav)],
-        capture_output=True, text=True, check=True).stdout.strip()
+    converted = subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(aiff),
+         "-ar", "16000", "-ac", "1", str(wav)],
+        capture_output=True,
+    )
+    duration = _media_duration(wav) if converted.returncode == 0 else 0.0
+    if duration < MIN_SPEECH_SECONDS:
+        pytest.skip(f"speech conversion produced {duration:.2f}s of audio")
 
     video = INPUT_DIR / "asr_integration.mp4"
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
-                    "-f", "lavfi", "-i", f"testsrc2=size=320x180:rate=15:duration={duration}",
-                    "-i", str(wav), "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                    "-c:a", "aac", "-shortest", str(video)], check=True, capture_output=True)
+    built = subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error",
+         "-f", "lavfi", "-i", f"testsrc2=size=320x180:rate=15:duration={duration:.3f}",
+         "-i", str(wav), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-shortest", str(video)],
+        capture_output=True,
+    )
+    if built.returncode != 0 or _media_duration(video) < MIN_SPEECH_SECONDS:
+        video.unlink(missing_ok=True)
+        pytest.skip("could not build a speech video fixture")
+
     try:
-        yield video, float(duration)
+        yield video, duration
     finally:
         video.unlink(missing_ok=True)
 

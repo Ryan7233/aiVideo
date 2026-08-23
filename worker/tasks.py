@@ -1,9 +1,7 @@
 import os
-import json
 import time
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Any
 
 from worker.celery_app import celery_app
 import logging
@@ -42,7 +40,12 @@ def run_registered_job(self, kind: str, params: dict, job_id: str):
     here rather than at module import so the worker only pays for it when a
     job actually arrives.
     """
-    import api.main  # noqa: F401  (registers the xiaohongshu pipeline handlers)
+    import importlib
+
+    # Importing api.main registers the pipeline job handlers. Done here rather
+    # than at module import so the worker only pays for it when a job arrives,
+    # and via importlib so it is not mistaken for an unused import.
+    importlib.import_module("api.main")
     from core.jobs import run_job
 
     return run_job(kind, params, job_id)
@@ -161,7 +164,6 @@ def asr_transcribe_async(self, url: str, language: str = None, subtitle_format: 
         # 更新任务状态
         self.update_state(state='PROGRESS', meta={'status': 'Preparing input...', 'progress': 10})
         
-        ts = int(time.time())
         input_path = _materialize_worker_source(url, "asr_async")
         
         self.update_state(state='PROGRESS', meta={'status': 'Loading ASR model...', 'progress': 20})

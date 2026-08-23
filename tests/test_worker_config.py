@@ -44,9 +44,11 @@ def test_start_scripts_consume_the_routed_queue(script):
 
 
 def test_registered_job_task_is_routed():
+    import importlib
+
     # celery_app.include is lazy: the module registers its tasks on import,
     # which is what the worker does at boot and what submit() does on dispatch.
-    import worker.tasks  # noqa: F401
+    importlib.import_module("worker.tasks")
     from worker.celery_app import celery_app
 
     assert "worker.tasks.run_registered_job" in celery_app.tasks

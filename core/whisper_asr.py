@@ -8,8 +8,7 @@ import json
 import time
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Union
-import subprocess
+from typing import List, Dict, Optional, Tuple
 from core.concurrency import run_ffmpeg
 from core.runtime import MODEL_DIR, OUTPUT_DIR
 
