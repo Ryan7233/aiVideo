@@ -1,0 +1,12 @@
+# Optional extras. Neither is needed for the main pipeline.
+#
+#   pip install -r requirements-gpu.txt
+#
+# torch: only enables CUDA auto-detection to fall back on. CTranslate2 already
+# handles this, so install it only if you have a specific reason.
+# clip:  enables the CLIP-based photo ranking path in
+#        core/advanced_photo_ranking.py, which otherwise logs
+#        "CLIP模型不可用，将使用传统方法" and uses the heuristic ranker.
+torch>=2.2.0
+torchaudio>=2.2.0
+clip @ git+https://github.com/openai/CLIP.git

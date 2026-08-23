@@ -1,28 +1,53 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
+# Pins are ranges, not exact versions: the previous exact pins (numpy 1.24.3,
+# scikit-learn 1.3.0, Pillow 10.0.0, opencv 4.8.1.78) have no wheels for
+# Python 3.13 and fail to build from source, so `pip install -r` could not
+# satisfy the README's "Python 3.11+".
+
+# --- web ---
+fastapi>=0.104.1,<1.0.0
+uvicorn[standard]>=0.24.0,<1.0.0
 pydantic>=2.5.0,<3.0.0
-requests==2.31.0
-python-multipart==0.0.6
-python-dotenv==1.0.0
-loguru==0.7.2
-aiofiles==23.2.1
-psutil==5.9.6
-pytest==7.4.3
-pytest-asyncio==0.21.1
-httpx==0.25.2
-yt-dlp>=2024.12.6,<2026.0.0
-celery==5.3.4
-redis==5.0.1
-flower==2.0.1
+python-multipart>=0.0.6,<1.0.0
+httpx>=0.25.2,<1.0.0
+requests>=2.31.0,<3.0.0
 aiohttp>=3.9.0,<4.0.0
-jieba==0.42.1
-faster-whisper==1.0.1
-torch>=2.0.0
-torchaudio>=2.0.0
-opencv-python==4.8.1.78
-scikit-learn==1.3.0
-librosa==0.10.1
-soundfile==0.12.1
+aiofiles>=23.2.1,<25.0.0
+
+# --- runtime ---
+python-dotenv>=1.0.0,<2.0.0
+loguru>=0.7.2,<1.0.0
+psutil>=5.9.6,<8.0.0
+
+# --- queue ---
+celery>=5.3.4,<6.0.0
+redis>=5.0.1,<7.0.0
+flower>=2.0.1,<3.0.0
+
+# --- media ingest ---
+# The upper bound was <2026.0.0, which pinned yt-dlp to releases predating the
+# platform changes it exists to keep up with.
+yt-dlp>=2024.12.6,<2027.0.0
+
+# --- speech & text ---
+# faster-whisper runs on CTranslate2, not torch. torch/torchaudio were listed
+# as hard dependencies (~3 GB) but nothing imports them unconditionally: the
+# only uses were a CUDA check (now done via CTranslate2) and a CLIP path whose
+# `clip` package was never in this file, so it could never activate.
+# For GPU inference or the CLIP ranking path see requirements-gpu.txt.
+faster-whisper>=1.0.1,<2.0.0
+jieba>=0.42.1,<1.0.0
+
+# --- imaging & analysis ---
+# headless: this is a server, nothing calls cv2.imshow, and the GUI build
+# needs libGL which the slim images do not ship.
+opencv-python-headless>=4.8.1,<5.0.0
+Pillow>=10.0.0,<12.0.0
+numpy>=1.24.3,<3.0.0
+scikit-learn>=1.3.0,<2.0.0
 scipy>=1.10.0,<2.0.0
-Pillow==10.0.0
-numpy==1.24.3
+librosa>=0.10.1,<1.0.0
+soundfile>=0.12.1,<1.0.0
+
+# --- tests ---
+pytest>=7.4.3,<9.0.0
+pytest-asyncio>=0.21.1,<2.0.0

@@ -65,6 +65,50 @@ INSTALL_HINT = (
 )
 
 
+FONT_DIRS = [
+    "/usr/share/fonts",
+    "/usr/local/share/fonts",
+    "/System/Library/Fonts",
+    "/Library/Fonts",
+    str(Path.home() / ".fonts"),
+    str(Path.home() / "Library" / "Fonts"),
+]
+
+# Filenames containing one of these are probed first; rendering-probing every
+# font on a system would be slow.
+_CJK_NAME_HINTS = (
+    "cjk", "noto", "han", "hei", "song", "ming", "kai", "yahei", "sim",
+    "pingfang", "hiragino", "wqy", "zenhei", "source", "unicode",
+)
+
+_MAX_PROBES = 40
+
+
+def _scan_font_dirs() -> Optional[str]:
+    """Look for an installed CJK font when none of the known paths matched."""
+    found = []
+    for directory in FONT_DIRS:
+        root = Path(directory)
+        if not root.is_dir():
+            continue
+        try:
+            for path in root.rglob("*"):
+                if path.suffix.lower() in {".ttc", ".ttf", ".otf", ".otc"}:
+                    found.append(path)
+        except OSError:
+            continue
+
+    # Likely candidates first, then everything else, capped.
+    def rank(path: Path) -> int:
+        name = path.name.lower()
+        return 0 if any(hint in name for hint in _CJK_NAME_HINTS) else 1
+
+    for path in sorted(found, key=rank)[:_MAX_PROBES]:
+        if _can_render_cjk(str(path)):
+            return str(path)
+    return None
+
+
 def _can_render_cjk(path: str) -> bool:
     """True when the font has a real glyph for a Chinese character."""
     try:
@@ -90,6 +134,13 @@ def find_cjk_font() -> Optional[str]:
         if Path(candidate).is_file() and _can_render_cjk(candidate):
             logger.info("Cover font: %s", candidate)
             return candidate
+
+    # The known paths differ between distributions and change between
+    # releases, so fall back to looking at what is actually installed.
+    scanned = _scan_font_dirs()
+    if scanned:
+        logger.info("Cover font (found by scan): %s", scanned)
+        return scanned
 
     logger.warning(INSTALL_HINT)
     return None

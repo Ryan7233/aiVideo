@@ -1,0 +1,128 @@
+"""Real Whisper on real speech.
+
+Everything else stubs the model. This runs it, because two defects only showed
+up against real audio: Mandarin came back in Traditional characters, and the
+fix for that (an initial_prompt) silently collapsed segmentation from 12
+segments to 2 spanning 24 seconds each.
+
+Speech is synthesised with macOS `say`, so no audio fixture is committed. The
+test skips where `say`, FFmpeg, or a cached model is unavailable; set
+ASR_INTEGRATION_TESTS=1 to allow downloading the tiny model.
+"""
+
+import os
+import shutil
+import subprocess
+
+import pytest
+
+from core.runtime import INPUT_DIR, MODEL_DIR
+
+pytestmark = pytest.mark.integration
+
+SCRIPT = (
+    "大家好，今天来聊聊小红书的内容运营。"
+    "第一个重点是发布时间。笔记放在晚上七点到九点，打开率能比中午高三成。"
+    "第二个重点是封面。封面上的字不要超过十二个。"
+)
+
+# Characters that exist only in Traditional Chinese. If these show up, Whisper
+# transcribed Mandarin into the wrong script.
+TRADITIONAL_ONLY = set("這個內容運營發時間點鐘臺灣體讚樹術書總結學習實現準備")
+
+
+def _requirements_met():
+    if not shutil.which("say") or not shutil.which("ffmpeg"):
+        return False, "needs macOS `say` and FFmpeg to synthesise speech"
+    model_cached = (MODEL_DIR / "whisper").is_dir() and any((MODEL_DIR / "whisper").iterdir())
+    if not model_cached and os.getenv("ASR_INTEGRATION_TESTS", "") not in {"1", "true"}:
+        return False, "no cached Whisper model; set ASR_INTEGRATION_TESTS=1 to download"
+    return True, ""
+
+
+@pytest.fixture(scope="module")
+def spoken_video(tmp_path_factory):
+    ok, reason = _requirements_met()
+    if not ok:
+        pytest.skip(reason)
+
+    tmp = tmp_path_factory.mktemp("asr")
+    script = tmp / "script.txt"
+    script.write_text(SCRIPT, encoding="utf-8")
+    aiff, wav = tmp / "speech.aiff", tmp / "speech.wav"
+
+    voice = None
+    for candidate in ("Tingting", "Meijia", "Eddy"):
+        if subprocess.run(["say", "-v", candidate, "-o", str(aiff), "测试"],
+                          capture_output=True).returncode == 0:
+            voice = candidate
+            break
+    if voice is None:
+        pytest.skip("no Chinese TTS voice installed")
+
+    subprocess.run(["say", "-v", voice, "-f", str(script), "-o", str(aiff)],
+                   check=True, capture_output=True)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(aiff),
+                    "-ar", "16000", "-ac", "1", str(wav)], check=True, capture_output=True)
+
+    duration = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(wav)],
+        capture_output=True, text=True, check=True).stdout.strip()
+
+    video = INPUT_DIR / "asr_integration.mp4"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                    "-f", "lavfi", "-i", f"testsrc2=size=320x180:rate=15:duration={duration}",
+                    "-i", str(wav), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-shortest", str(video)], check=True, capture_output=True)
+    try:
+        yield video, float(duration)
+    finally:
+        video.unlink(missing_ok=True)
+
+
+@pytest.fixture(scope="module")
+def transcript(spoken_video):
+    from core.whisper_asr import get_asr_service
+
+    video, _ = spoken_video
+    return get_asr_service(model_size="tiny").transcribe_video(str(video), cleanup_audio=True)
+
+
+def test_language_is_detected_as_chinese(transcript):
+    assert transcript["language"] == "zh"
+
+
+def test_output_is_simplified_not_traditional(transcript):
+    text = "".join(segment["text"] for segment in transcript["segments"])
+    offenders = sorted({char for char in text if char in TRADITIONAL_ONLY})
+    # A couple of stray characters are within tiny-model noise; a script-wide
+    # flip produces many.
+    assert len(offenders) <= 3, f"transcribed into Traditional Chinese: {offenders}"
+
+
+def test_segmentation_is_not_collapsed(transcript):
+    """The initial_prompt fix regressed this once; it must stay guarded."""
+    segments = transcript["segments"]
+    assert len(segments) >= 4, f"only {len(segments)} segments; the prompt is too long"
+    longest = max(segment["end"] - segment["start"] for segment in segments)
+    assert longest <= 15, f"longest segment is {longest:.1f}s; segmentation collapsed"
+
+
+def test_content_words_survive(transcript):
+    text = "".join(segment["text"] for segment in transcript["segments"])
+    assert "内容" in text or "运营" in text
+
+
+def test_windows_get_distinct_text(spoken_video, transcript):
+    """Coarse segments make every scoring window see the same words."""
+    from core.video_workflow import _build_candidates
+
+    _, duration = spoken_video
+    candidates = _build_candidates(
+        duration, 8.0, "小红书运营",
+        [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in transcript["segments"]],
+        {"scene_changes": [], "audio_energy": [], "motion_activity": []},
+        {"semantic": 0.5, "visual": 0.2, "audio": 0.3},
+    )
+    texts = [c["text"] for c in candidates if c["text"]]
+    assert len(set(texts)) > 1, "every window received identical transcript text"

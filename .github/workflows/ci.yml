@@ -7,16 +7,26 @@ on:
 
 jobs:
   test:
+    name: tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The README promises 3.11+. requirements.txt previously pinned exact
+        # versions with no 3.13 wheels, so `pip install -r` failed outright
+        # there; the matrix keeps that promise honest.
+        python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install FFmpeg and CJK fonts
+        # fonts-noto-cjk so the cover tests exercise the real font path rather
+        # than skipping; the runtime images install the same package.
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-noto-cjk
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Python tests

@@ -9,7 +9,7 @@
 | 视频上传、远程下载 | 可用 | 分块写入；远程地址限制为公网 HTTP/HTTPS，并限制下载大小 |
 | 多片段智能剪辑 | 可用 | 使用真实视频时长、画面变化、运动、音频 RMS 和可选 ASR 文本评分 |
 | 9:16 转码、字幕烧录 | 可用 | 依赖 FFmpeg |
-| Faster-Whisper ASR | 可用 | 首次使用会下载所选模型；可关闭内容分析以跳过 ASR |
+| Faster-Whisper ASR | 可用 | 首次使用会下载所选模型；中文默认输出简体；可关闭内容分析以跳过 ASR |
 | 语义评分 | 可用 | 优先调用 LLM 批量打分；未配置或调用失败时回退到 jieba 分词 + 词典规则 |
 | 照片排序、拼图、封面 | 可用/可降级 | CLIP 等可选模型缺失时使用基础策略 |
 | LLM 文案 | 可用/可降级 | 配置有效 API Key 时调用模型，否则明确返回本地模板 |
@@ -21,7 +21,8 @@
 
 ## 快速启动
 
-要求：Python 3.11+、FFmpeg。只有使用 Celery 后台任务时才需要 Redis。
+要求：Python 3.11–3.13、FFmpeg。只有使用 Celery 后台任务时才需要 Redis。
+CI 会同时在 3.11 和 3.13 上跑测试。
 
 ```bash
 git clone https://github.com/Ryan7233/aiVideo.git
@@ -50,6 +51,26 @@ python start_server.py
 4. `core/semantic_scoring.py` 把所有候选窗口**批量**送 LLM 打分（未配置时用词典规则）。
 5. `core/video_workflow.py` 将语义、画面与音频分数归一化，按开场/高潮/结尾约束选取互不重叠的片段。
 6. FFmpeg 把片段转成 1080×1920 H.264/AAC 文件并合并，结果通过 `/output/...` 返回。
+
+### 语音识别
+
+中文默认输出**简体**。Whisper 对普通话经常转写成繁体，而字幕会直接烧进视频，
+`core/semantic_analysis.py` 里的情感和主题词典也全是简体，繁体输出会让匹配退化。
+修法是在检测到中文时加一个极短的 `initial_prompt`。
+
+这个提示必须短。它会通过 `condition_on_previous_text` 一直往后传，越长分段越粗
+（34 秒素材、tiny 模型实测）：
+
+| initial_prompt | 分段数 | 最长片段 | 繁体字符 |
+|---|---|---|---|
+| 无 | 12 | 4.7s | 24 |
+| `简体`（当前默认） | 7 | 6.2s | 2 |
+| `简体中文` | 4 | 10.8s | 2 |
+| `以下是普通话的句子。` | 2 | 29.6s | 2 |
+
+分段变粗不只是难看：每个候选窗口会拿到几乎一样的文本，语义评分就失去区分度，
+烧录字幕也会变成几十秒一整块。`ASR_INITIAL_PROMPT` 可以覆盖，
+`ASR_LANGUAGE_DETECTION=false` 可以关掉转录前的语言探测（约 0.15 秒）。
 
 ### 语义评分
 
@@ -214,6 +235,7 @@ core/text_tokenizer.py      中英文分词与词典匹配（jieba，缺失时�
 core/semantic_scoring.py    候选片段语义评分（LLM 优先，词典规则兜底）
 core/color_palette.py       从图片提取配色（封面渲染与设计共用）
 core/fonts.py               字体解析（验证中文渲染能力，非仅检查文件存在）
+requirements-gpu.txt        可选：torch / CLIP，主链路不需要
 core/concurrency.py         FFmpeg 并发上限
 core/jobs.py                后台任务提交（线程池 / Celery）
 core/job_store.py           SQLite 任务记录

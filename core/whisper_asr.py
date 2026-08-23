@@ -21,10 +21,52 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Deliberately two characters. The prompt carries forward through
+# condition_on_previous_text, and a longer one makes Whisper emit far coarser
+# segments -- measured on a 34s clip, tiny model:
+#
+#   prompt                 segments  longest segment  traditional chars
+#   (none)                       12            4.7s                 24
+#   简体                          7            6.2s                  2
+#   简体中文                       4           10.8s                  2
+#   以下是普通话的句子。              2           29.6s                  2
+#
+# Coarse segments are not cosmetic: per-window semantic scoring gives every
+# window the same text, and burnt-in subtitles become 30-second blocks.
+DEFAULT_SIMPLIFIED_PROMPT = "简体"
+
+
+def simplified_chinese_prompt() -> str:
+    """Seed text that biases Whisper toward Simplified output."""
+    return os.getenv("ASR_INITIAL_PROMPT", DEFAULT_SIMPLIFIED_PROMPT)
+
+
+
 
 class WhisperASRService:
     """Whisper自动语音识别服务"""
     
+    @staticmethod
+    def _detect_device() -> str:
+        """Pick cuda or cpu without requiring torch.
+
+        CTranslate2 is what faster-whisper actually runs inference on, so
+        it already knows whether a GPU is usable. torch was a hard
+        dependency purely for this check -- several GB for one boolean.
+        """
+        try:
+            import ctranslate2
+
+            return "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+        except Exception:
+            pass
+        try:  # honoured if the caller installed torch themselves
+            import torch
+
+            return "cuda" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            return "cpu"
+
     def __init__(self, model_size: str = "base", device: str = "auto", compute_type: str = "auto"):
         """
         初始化Whisper ASR服务
@@ -67,11 +109,7 @@ class WhisperASRService:
             
             # 自动选择设备和计算类型
             if self.device == "auto":
-                try:
-                    import torch
-                    self.device = "cuda" if torch.cuda.is_available() else "cpu"
-                except ImportError:
-                    self.device = "cpu"
+                self.device = self._detect_device()
             
             if self.compute_type == "auto":
                 self.compute_type = "float16" if self.device == "cuda" else "int8"
@@ -176,6 +214,26 @@ class WhisperASRService:
             logger.error(f"❌ 语言检测失败: {str(e)}")
             return "en", 0.0
     
+    def _detect_language(self, audio_path: str) -> Optional[str]:
+        """Detect the spoken language before transcribing.
+
+        Costs about 0.15s (one window) and lets the Simplified-Chinese prompt
+        be applied only when the audio really is Mandarin, instead of forcing
+        a language and mangling everything else.
+        """
+        if os.getenv("ASR_LANGUAGE_DETECTION", "true").lower() in {"0", "false", "no"}:
+            return None
+        try:
+            from faster_whisper.audio import decode_audio
+
+            audio = decode_audio(audio_path, sampling_rate=16000)
+            language, probability, _ = self.model.detect_language(audio)
+            logger.info(f"语言检测: {language} ({probability:.2f})")
+            return language
+        except Exception as exc:
+            logger.debug(f"语言检测失败，交给 Whisper 自动判断: {exc}")
+            return None
+
     def transcribe_audio(self, audio_path: str, language: str = None, 
                         task: str = "transcribe", **kwargs) -> Dict:
         """
@@ -229,7 +287,14 @@ class WhisperASRService:
             
             # 合并用户参数
             params = {**default_params, **kwargs}
-            
+
+            # 中文默认输出简体：Whisper 对普通话经常转写成繁体，而这是给
+            # 小红书用的，字幕会直接烧进视频，词典也全是简体。
+            if params.get("initial_prompt") is None:
+                resolved = language or self._detect_language(audio_path)
+                if resolved and resolved.lower().startswith("zh"):
+                    params["initial_prompt"] = simplified_chinese_prompt()
+
             # 执行转录
             segments, info = self.model.transcribe(
                 audio_path,

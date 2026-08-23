@@ -249,3 +249,42 @@ def test_smart_cover_designer_writes_a_real_file(tmp_path):
         source.unlink(missing_ok=True)
         if cover and cover.is_file():
             cover.unlink()
+
+
+class TestFontDirectoryScan:
+    """The container fallback.
+
+    Known font paths differ between distributions and move between releases,
+    so when none of them match the resolver looks at what is actually
+    installed. Without this, getting fonts-noto-cjk into the image would only
+    help if Debian kept the file exactly where the candidate list expects.
+    """
+
+    def test_scan_finds_a_font_when_known_paths_all_miss(self, monkeypatch):
+        monkeypatch.setattr(fonts, "CJK_FONT_CANDIDATES", ["/nope/none.ttc"])
+        fonts.reset_cache()
+        try:
+            found = fonts.find_cjk_font()
+            if found is None:
+                pytest.skip("no CJK font installed on this machine")
+            assert fonts._can_render_cjk(found)
+        finally:
+            fonts.reset_cache()
+
+    def test_scan_returns_none_when_there_is_nothing_to_find(self, monkeypatch):
+        monkeypatch.setattr(fonts, "CJK_FONT_CANDIDATES", [])
+        monkeypatch.setattr(fonts, "FONT_DIRS", ["/nonexistent/fonts"])
+        fonts.reset_cache()
+        try:
+            assert fonts.find_cjk_font() is None
+        finally:
+            fonts.reset_cache()
+
+    def test_scan_tolerates_unreadable_directories(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(fonts, "CJK_FONT_CANDIDATES", [])
+        monkeypatch.setattr(fonts, "FONT_DIRS", [str(tmp_path), "/proc/1/root"])
+        fonts.reset_cache()
+        try:
+            assert fonts.find_cjk_font() is None  # must not raise
+        finally:
+            fonts.reset_cache()
