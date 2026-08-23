@@ -14,6 +14,8 @@ import librosa
 
 from core.concurrency import run_ffmpeg
 
+from core.degradation import mark_degraded
+
 logger = logging.getLogger(__name__)
 
 # 尝试导入音频处理库
@@ -296,7 +298,7 @@ class AudioProcessingService:
             
         except Exception as e:
             logger.error(f"基础音频分析失败: {e}")
-            return {'duration': 30.0, 'sample_rate': 44100, 'channels': 2}
+            return mark_degraded({'duration': 30.0, 'sample_rate': 44100, 'channels': 2}, e, logger=logger, context='_basic_audio_analysis')
     
     def _detect_speech_segments(self, y: np.ndarray, sr: int) -> List[Dict]:
         """检测语音片段"""

@@ -19,6 +19,8 @@ from core.color_palette import (
 )
 
 from core.fonts import load_font
+from core.degradation import mark_degraded
+
 logger = logging.getLogger(__name__)
 
 # 尝试导入PIL用于图像处理
@@ -155,20 +157,25 @@ class SmartCoverDesigner:
             
         except Exception as e:
             logger.error(f"智能封面生成失败: {e}")
-            return self._generate_fallback_cover(clips, title)
+            return mark_degraded(self._generate_fallback_cover(clips, title), e, logger=logger, context='generate_smart_cover')
     
-    def _select_best_frame(self, clips: List[Dict], photos: List[Dict]) -> Dict:
-        """选择最佳帧或照片"""
+    def rank_cover_candidates(self, clips: List[Dict], photos: List[Dict]) -> List[Dict]:
+        """Score every usable frame and photo, best first.
+
+        The analysis was previously only reachable through
+        generate_smart_cover, which renders a single-frame cover and discards
+        the rest of the ranking. The collage renderer needs the ordered list:
+        picking which frames go on a cover is exactly this judgement.
+        """
         try:
             candidates = []
-            
+
             # 从视频片段中提取关键帧
             for clip in clips:
                 video_path = clip.get('output_path', '')
-                if Path(video_path).exists():
-                    frames = self._extract_key_frames(video_path, clip)
-                    candidates.extend(frames)
-            
+                if video_path and Path(video_path).exists():
+                    candidates.extend(self._extract_key_frames(video_path, clip))
+
             # 添加照片候选
             for photo in photos:
                 if Path(photo.get('path', '')).exists():
@@ -178,27 +185,29 @@ class SmartCoverDesigner:
                         'score': photo.get('final_score', 0.5),
                         'source': 'photo_ranking'
                     })
-            
+
             if not candidates:
                 logger.warning("没有找到有效的封面候选")
-                return {}
-            
-            # 评估候选帧/照片
-            scored_candidates = []
+                return []
+
             for candidate in candidates:
-                score = self._evaluate_cover_candidate(candidate)
-                candidate['cover_score'] = score
-                scored_candidates.append(candidate)
-            
-            # 选择最佳候选
-            best_candidate = max(scored_candidates, key=lambda x: x['cover_score'])
-            
-            logger.info(f"选择最佳封面素材: {best_candidate['type']}, 分数: {best_candidate['cover_score']:.2f}")
-            return best_candidate
-            
+                candidate['cover_score'] = self._evaluate_cover_candidate(candidate)
+
+            ranked = sorted(candidates, key=lambda item: item['cover_score'], reverse=True)
+            logger.info(
+                f"封面候选评分完成: {len(ranked)} 个，最高 {ranked[0]['cover_score']:.2f}"
+                f"（{ranked[0]['type']}）"
+            )
+            return ranked
+
         except Exception as e:
-            logger.error(f"选择最佳帧失败: {e}")
-            return {}
+            logger.error(f"封面候选评分失败: {e}")
+            return []
+
+    def _select_best_frame(self, clips: List[Dict], photos: List[Dict]) -> Dict:
+        """选择最佳帧或照片"""
+        ranked = self.rank_cover_candidates(clips, photos)
+        return ranked[0] if ranked else {}
     
     def _extract_key_frames(self, video_path: str, clip_info: Dict) -> List[Dict]:
         """从视频中提取关键帧"""
@@ -412,7 +421,7 @@ class SmartCoverDesigner:
             }
             
         except Exception:
-            return {'mean': 128, 'std': 50, 'is_dark': False, 'is_bright': False, 'high_contrast': False}
+            return mark_degraded({'mean': 128, 'std': 50, 'is_dark': False, 'is_bright': False, 'high_contrast': False}, '_analyze_brightness_distribution fallback', logger=logger, context='_analyze_brightness_distribution')
     
     def _detect_content_type(self, image: Image.Image) -> str:
         """检测图像内容类型"""
@@ -465,7 +474,7 @@ class SmartCoverDesigner:
             }
             
         except Exception:
-            return {'edge_distribution': {'top': 0.1, 'middle': 0.1, 'bottom': 0.1}, 'main_subject_area': 'middle', 'complexity': 0.1}
+            return mark_degraded({'edge_distribution': {'top': 0.1, 'middle': 0.1, 'bottom': 0.1}, 'main_subject_area': 'middle', 'complexity': 0.1}, '_analyze_composition fallback', logger=logger, context='_analyze_composition')
     
     def _determine_design_scheme(self, image_analysis: Dict, style: str) -> Dict:
         """确定设计方案"""
@@ -666,7 +675,7 @@ class SmartCoverDesigner:
             
         except Exception as e:
             logger.error(f"封面图像生成失败: {e}")
-            return self._generate_fallback_cover([], text_layout['title']['text'])
+            return mark_degraded(self._generate_fallback_cover([], text_layout['title']['text']), e, logger=logger, context='_generate_cover_image')
     
     def _resize_and_crop_image(self, image: Image.Image, target_size: Tuple[int, int]) -> Image.Image:
         """调整图像尺寸并裁剪"""

@@ -9,6 +9,8 @@ import random
 from typing import List, Dict, Tuple, Any
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 from core.fonts import load_font
+from core.degradation import mark_degraded
+
 from loguru import logger
 
 class AdvancedCollageGenerator:
@@ -131,11 +133,7 @@ class AdvancedCollageGenerator:
             
         except Exception as e:
             logger.error(f"高级拼图生成失败: {str(e)}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "fallback_available": True
-            }
+            return mark_degraded({'status': 'error', 'error': str(e), 'fallback_available': True}, e, logger=logger, context='generate_advanced_collage')
     
     def _load_and_process_images(self, image_paths: List[str]) -> List[Image.Image]:
         """加载和预处理图片"""

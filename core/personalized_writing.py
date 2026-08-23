@@ -11,6 +11,8 @@ from collections import defaultdict, Counter
 from pathlib import Path
 from datetime import datetime
 
+from core.degradation import mark_degraded
+
 logger = logging.getLogger(__name__)
 
 
@@ -174,7 +176,7 @@ class PersonalizedWritingService:
         except Exception as e:
             logger.error(f"个性化内容生成失败: {e}")
             # 回退到默认生成
-            return self._generate_default_content(content_data, style_override or '治愈')
+            return mark_degraded(self._generate_default_content(content_data, style_override or '治愈'), e, logger=logger, context='generate_personalized_content')
     
     def _analyze_vocabulary_patterns(self, samples: List[Dict]) -> Dict:
         """分析词汇模式"""

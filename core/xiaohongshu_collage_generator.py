@@ -7,6 +7,8 @@ import time
 import uuid
 from typing import Dict, List, Any, Optional, Tuple
 from core.fonts import load_font
+from core.degradation import mark_degraded
+
 from loguru import logger
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 import numpy as np
@@ -245,11 +247,7 @@ class XiaohongshuCollageGenerator:
             
         except Exception as e:
             logger.error(f"小红书拼图生成失败: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "timestamp": int(time.time())
-            }
+            return mark_degraded({'success': False, 'error': str(e), 'timestamp': int(time.time())}, e, logger=logger, context='generate_xiaohongshu_collage')
 
     def _draw_text_blocks(self, canvas: Image.Image, blocks: List[Dict[str, Any]], colors: Dict, config: CollageConfig) -> Image.Image:
         draw = ImageDraw.Draw(canvas)

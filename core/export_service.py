@@ -13,6 +13,8 @@ from core.runtime import OUTPUT_DIR
 from datetime import datetime
 import hashlib
 
+from core.degradation import mark_degraded
+
 logger = logging.getLogger(__name__)
 
 
@@ -81,11 +83,7 @@ class ExportService:
             
         except Exception as e:
             logger.error(f"导出失败: {str(e)}")
-            return {
-                'status': 'error',
-                'error': str(e),
-                'created_at': datetime.now().isoformat()
-            }
+            return mark_degraded({'status': 'error', 'error': str(e), 'created_at': datetime.now().isoformat()}, e, logger=logger, context='export_xiaohongshu_content')
     
     def _generate_export_id(self, pipeline_result: Dict) -> str:
         """生成导出ID"""

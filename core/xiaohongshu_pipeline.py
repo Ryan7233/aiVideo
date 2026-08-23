@@ -10,6 +10,8 @@ from pathlib import Path
 from datetime import datetime
 import random
 
+from core.degradation import mark_degraded
+
 logger = logging.getLogger(__name__)
 
 
@@ -174,7 +176,7 @@ class StorylineGenerator:
             
         except Exception as e:
             logger.error(f"故事线生成失败: {str(e)}")
-            return self._get_fallback_storyline(city, notes)
+            return mark_degraded(self._get_fallback_storyline(city, notes), e, logger=logger, context='generate_storyline')
     
     def _analyze_transcript(self, transcript_mmss: List[Dict]) -> Dict:
         """分析转录内容"""
@@ -544,7 +546,7 @@ class XiaohongshuDraftGenerator:
             
         except Exception as e:
             logger.error(f"文案生成失败: {str(e)}")
-            return self._get_fallback_draft(storyline)
+            return mark_degraded(self._get_fallback_draft(storyline), e, logger=logger, context='generate_draft')
     
     def _generate_title(self, storyline: Dict, brand_tone: str) -> str:
         """生成标题"""

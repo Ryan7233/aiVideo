@@ -207,6 +207,24 @@ media / jobs / tasks / admin` 分组。此前有 14 个路由在前端、测试�
 方差在 5% 以内，边缘密度在 0.63–1.17 倍之间——调用方用它做照片之间的相对比较，不是绝对值。
 `tests/test_imaging.py` 里有对照测试，装了 OpenCV 时会自动运行。
 
+### 降级必须可见
+
+这个项目最反复出现的问题是同一个形状：某处抛异常 → 宽泛的 `except` 返回一个同样形状的
+替代值 → 调用方照常报告成功。已经出现过七次（三个 NameError、封面从未写文件、音频特征
+全部丢失、拼图每次都抛、前端静默退回本地 Canvas 还提示"生成完成"）。
+
+带着更少的信息继续跑往往是对的，**悄悄地跑不是**。所以所有返回替代载荷的兜底路径统一
+用 `core/degradation.py` 标记：
+
+```python
+return mark_degraded(self._get_fallback_analysis(path), e, logger=logger, context="analyze_video_content")
+```
+
+结果里会带 `degraded: true` 和 `degraded_reason`，调用方、测试和 UI 用一个键就能判断，
+不用靠形状猜。原来散落的四种写法（`fallback` / `is_fallback` / `status: "fallback"` /
+`degraded`）统一成一种。`tests/test_degradation.py` 会静态扫描：任何在宽泛 `except` 里
+返回完整载荷却没标记的地方都会让测试失败。
+
 ### 封面
 
 封面配色可以设成 `theme="auto"`，从实际图片里聚类取色，而不是套用固定主题——此前不管照片
@@ -214,6 +232,11 @@ media / jobs / tasks / admin` 分组。此前有 14 个路由在前端、测试�
 的同色系暗色（背景是 primary→secondary 渐变，用互补色会很突兀），互补色只用在小面积
 点缀上。网格也会按图片数量自适应（4 张用 2×2，6 张用 2×3），此前固定 3×3，不足 9 张就会
 在封面下方留一条空白带。
+
+封面选材和渲染现在是连起来的。`/cover/generate` 传 `images` 就按给定顺序合成；只传
+`clips` / `photos` 时，`core/cover_pipeline.py` 会先让封面设计器抽关键帧、按清晰度、
+比例适配和标题留白给每个候选打分，再把评分最高的几张交给渲染器，并在 `selection` 字段里
+返回完整排名（谁被选中、各自多少分）。此前这两个模块各做各的——设计器的排名从未传给渲染器。
 
 字体解析统一走 `core/fonts.py`，它会**实际渲染一个中文字符**来验证字体可用，而不是只检查
 文件存在。原来的代码把 `/System/Library/Fonts/PingFang.ttc` 写死在第一位，而当前 macOS 上
@@ -247,6 +270,10 @@ core/whisper_asr.py         Faster-Whisper 模型缓存与转录
 core/text_tokenizer.py      中英文分词与词典匹配（jieba，缺失时降级）
 core/semantic_scoring.py    候选片段语义评分（LLM 优先，词典规则兜底）
 core/color_palette.py       从图片提取配色（封面渲染与设计共用）
+core/cover_pipeline.py      封面选材 → 渲染的串联
+core/degradation.py         降级标记（mark_degraded / is_degraded）
+core/env.py                 环境变量读取（空值等价于未配置）
+core/imaging.py             图像运算（替代 OpenCV）
 core/fonts.py               字体解析（验证中文渲染能力，非仅检查文件存在）
 requirements-gpu.txt        可选：torch / CLIP，主链路不需要
 core/concurrency.py         FFmpeg 并发上限

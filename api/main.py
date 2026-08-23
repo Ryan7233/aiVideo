@@ -1106,21 +1106,52 @@ class ImageDecorateReq(BaseModel):
     def validate_image_path(cls, value):
         return str(resolve_media_path(value))
 
+# Canvas and batch limits for the image endpoints. Pillow allocates
+# width * height * 3 bytes up front, so an unbounded request is a
+# straightforward way to exhaust the box: 10^9 x 10^9 was accepted.
+MAX_CANVAS_EDGE = 8192
+MAX_CANVAS_PIXELS = 16_000_000      # ~4000x4000
+MAX_COLLAGE_IMAGES = 50
+MAX_TEXT_BLOCKS = 30
+
+
+def _validate_canvas(width: int, height: int) -> None:
+    if width * height > MAX_CANVAS_PIXELS:
+        raise ValueError(
+            f"画布像素数不能超过 {MAX_CANVAS_PIXELS}（当前 {width}x{height}）"
+        )
+
+
 class SmartCoverReq(BaseModel):
-    images: List[str]
-    title: str
+    """Either name the images, or hand over clips/photos and let it choose.
+
+    With `images` the renderer composites exactly those, in order. With
+    `clips` and/or `photos` the cover designer extracts key frames, scores
+    every candidate on sharpness, aspect fit and title room, and the best
+    `image_count` of them are rendered.
+    """
+
+    images: List[str] = Field(default_factory=list, max_length=MAX_COLLAGE_IMAGES)
+    clips: List[Dict[str, Any]] = Field(default_factory=list, max_length=MAX_COLLAGE_IMAGES)
+    photos: List[Dict[str, Any]] = Field(default_factory=list, max_length=MAX_COLLAGE_IMAGES)
+    image_count: int = Field(4, ge=1, le=9)
+    title: str = ""
     subtitle: str = ""
-    layout: str = "grid_3x3"
-    theme: str = "pink_gradient"
+    layout: str = "auto"
+    theme: str = "auto"
     platform: str = "xiaohongshu"
     custom_config: Optional[Dict[str, Any]] = None
 
     @field_validator("images")
     @classmethod
     def validate_images(cls, value):
-        if not value:
-            raise ValueError("图片列表不能为空")
         return [str(resolve_media_path(path)) for path in value]
+
+    @model_validator(mode="after")
+    def require_some_material(self):
+        if not (self.images or self.clips or self.photos):
+            raise ValueError("需要提供 images，或 clips/photos 由系统自动选材")
+        return self
 
 class LLMContentReq(BaseModel):
     theme: str
@@ -1137,22 +1168,6 @@ class ProContentReq(BaseModel):
     content_type: str = "complete"  # title, description, hashtags, complete
     style: str = "professional"
     target_audience: str = "general"
-
-# Canvas and batch limits for the image endpoints. Pillow allocates
-# width * height * 3 bytes up front, so an unbounded request is a
-# straightforward way to exhaust the box: 10^9 x 10^9 was accepted.
-MAX_CANVAS_EDGE = 8192
-MAX_CANVAS_PIXELS = 16_000_000      # ~4000x4000
-MAX_COLLAGE_IMAGES = 50
-MAX_TEXT_BLOCKS = 30
-
-
-def _validate_canvas(width: int, height: int) -> None:
-    if width * height > MAX_CANVAS_PIXELS:
-        raise ValueError(
-            f"画布像素数不能超过 {MAX_CANVAS_PIXELS}（当前 {width}x{height}）"
-        )
-
 
 class AdvancedCollageReq(BaseModel):
     images: List[str] = Field(..., min_length=1, max_length=MAX_COLLAGE_IMAGES)
@@ -2897,13 +2912,28 @@ async def get_collage_layouts():
 # 智能封面生成相关API
 @app.post("/cover/generate", tags=["media"])
 async def generate_cover_image(request: SmartCoverReq):
-    """生成智能封面"""
+    """生成智能封面。
+
+    传 images 就按给定顺序合成；只传 clips/photos 时，先由封面设计器抽帧打分，
+    再把评分最高的几张交给渲染器——两个模块此前各做各的，选材结果从未传到渲染。
+    """
     try:
-        generator = get_smart_cover_generator()
-        # Pillow work: keep it off the event loop.
-        result = await asyncio.to_thread(
-            generator.generate_cover, images=request.images, title=request.title, subtitle=request.subtitle, layout=request.layout, theme=request.theme, platform=request.platform, custom_config=request.custom_config
-        )
+        if request.images:
+            generator = get_smart_cover_generator()
+            # Pillow work: keep it off the event loop.
+            result = await asyncio.to_thread(
+                generator.generate_cover, images=request.images, title=request.title,
+                subtitle=request.subtitle, layout=request.layout, theme=request.theme,
+                platform=request.platform, custom_config=request.custom_config,
+            )
+        else:
+            from core.cover_pipeline import build_cover
+
+            result = await asyncio.to_thread(
+                build_cover, request.clips, request.photos, title=request.title,
+                subtitle=request.subtitle, image_count=request.image_count,
+                layout=request.layout, theme=request.theme, platform=request.platform,
+            )
         return result
     except Exception as e:
         logger.error(f"智能封面生成失败: {str(e)}")

@@ -6,6 +6,8 @@ import os
 import aiohttp
 import random
 from typing import Dict, List, Optional, Any, Tuple
+from core.degradation import mark_degraded
+
 from loguru import logger
 from datetime import datetime
 
@@ -90,7 +92,7 @@ class LLMService:
             
         except Exception as e:
             logger.error(f"LLM API调用失败: {str(e)}")
-            return self._generate_fallback_content(theme, photo_descriptions, style, length)
+            return mark_degraded(self._generate_fallback_content(theme, photo_descriptions, style, length), e, logger=logger, context='generate_xiaohongshu_content')
     
     async def generate_pro_content(
         self,
@@ -112,7 +114,7 @@ class LLMService:
             
         except Exception as e:
             logger.error(f"Pro内容生成失败: {str(e)}")
-            return self._generate_fallback_pro_content(topic, content_type)
+            return mark_degraded(self._generate_fallback_pro_content(topic, content_type), e, logger=logger, context='generate_pro_content')
     
     def _build_xiaohongshu_prompt(
         self, theme: str, photo_descriptions: List[str], 
@@ -459,12 +461,7 @@ class LLMService:
             
         except Exception as e:
             logger.error(f"解析Pro内容响应失败: {str(e)}")
-            return {
-                "status": "partial_success",
-                "type": content_type,
-                "data": {"content": response},
-                "generated_at": datetime.now().isoformat()
-            }
+            return mark_degraded({'status': 'partial_success', 'type': content_type, 'data': {'content': response}, 'generated_at': datetime.now().isoformat()}, e, logger=logger, context='_parse_pro_content_response')
     
     def _generate_fallback_content(
         self, theme: str, photo_descriptions: List[str], style: str, length: str

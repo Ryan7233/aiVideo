@@ -10,6 +10,8 @@ from collections import Counter
 
 from core.text_tokenizer import content_tokens, scan_lexicon, split_sentences, tokenize
 
+from core.degradation import mark_degraded
+
 logger = logging.getLogger(__name__)
 
 
@@ -298,10 +300,7 @@ class SemanticAnalyzer:
 
         except Exception as e:
             logger.error(f"情感分析失败: {str(e)}")
-            return {
-                'positive': 0.0, 'negative': 0.0, 'neutral': 0.0,
-                'overall': 0.0, 'intensity': 0.0, 'dominant': 'neutral'
-            }
+            return mark_degraded({'positive': 0.0, 'negative': 0.0, 'neutral': 0.0, 'overall': 0.0, 'intensity': 0.0, 'dominant': 'neutral'}, e, logger=logger, context='analyze_sentiment')
 
     def analyze_topic_relevance(self, text: str) -> Dict[str, float]:
         """
@@ -430,19 +429,7 @@ class SemanticAnalyzer:
             
         except Exception as e:
             logger.error(f"内容质量分析失败: {str(e)}")
-            return {
-                'overall_score': 0.0,
-                'content_density': 0.0,
-                'vocabulary_diversity': 0.0,
-                'emotional_intensity': 0.0,
-                'topic_relevance': 0.0,
-                'structure_quality': 0.0,
-                'positivity': 0.0,
-                'word_count': 0,
-                'sentence_count': 0,
-                'dominant_topic': 'unknown',
-                'dominant_sentiment': 'neutral'
-            }
+            return mark_degraded({'overall_score': 0.0, 'content_density': 0.0, 'vocabulary_diversity': 0.0, 'emotional_intensity': 0.0, 'topic_relevance': 0.0, 'structure_quality': 0.0, 'positivity': 0.0, 'word_count': 0, 'sentence_count': 0, 'dominant_topic': 'unknown', 'dominant_sentiment': 'neutral'}, e, logger=logger, context='calculate_content_quality_score')
     
     def analyze_transcript_segments(self, segments: List[Dict]) -> List[Dict]:
         """

@@ -13,6 +13,8 @@ import logging
 
 from core.concurrency import run_ffmpeg
 
+from core.degradation import mark_degraded
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,7 +64,7 @@ class SmartClippingEngine:
 
         except Exception as e:
             logger.error(f"Video analysis failed: {str(e)}")
-            return self._get_fallback_analysis(video_path)
+            return mark_degraded(self._get_fallback_analysis(video_path), e, logger=logger, context='analyze_video_content')
 
     def _has_audio_stream(self, video_path: str) -> bool:
         """Check for an audio stream before wiring it into the filter graph."""
@@ -337,7 +339,7 @@ class SmartClippingEngine:
             
         except Exception as e:
             logger.error(f"Smart segment selection failed: {str(e)}")
-            return self._get_fallback_segments(video_path, min_duration, max_duration, count)
+            return mark_degraded(self._get_fallback_segments(video_path, min_duration, max_duration, count), e, logger=logger, context='select_best_segments')
     
     def _filter_problematic_segments(self, video_path: str, segments: List[Dict], 
                                    avoid_black: bool, avoid_silence: bool) -> List[Dict]:

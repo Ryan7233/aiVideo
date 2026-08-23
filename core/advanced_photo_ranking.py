@@ -11,6 +11,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from collections import defaultdict
 import random
 
+from core.degradation import mark_degraded
+
 logger = logging.getLogger(__name__)
 
 # 尝试导入CLIP相关库（可选依赖）
@@ -142,7 +144,7 @@ class AdvancedPhotoRankingService:
             # 回退到基础版本
             from core.xiaohongshu_pipeline import get_photo_ranking_service
             basic_service = get_photo_ranking_service()
-            return basic_service.rank_photos(photos, top_k)
+            return mark_degraded(basic_service.rank_photos(photos, top_k), e, logger=logger, context='rank_photos_advanced')
     
     def _extract_photo_features(self, photo_path: str, index: int, context: Dict = None) -> Optional[Dict]:
         """提取照片基础特征"""

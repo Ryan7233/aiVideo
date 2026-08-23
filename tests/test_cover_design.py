@@ -286,3 +286,108 @@ class TestFontDirectoryScan:
             assert fonts.find_cjk_font() is None  # must not raise
         finally:
             fonts.reset_cache()
+
+
+class TestCoverPipeline:
+    """Selection feeding rendering.
+
+    The designer scored candidates and the renderer composited images, but the
+    ranking never reached the renderer: whatever the caller passed got used,
+    in the order given.
+    """
+
+    @pytest.fixture
+    def mixed_photos(self, tmp_path):
+        """Three sharp, detailed images and three flat blurred ones."""
+        import numpy as np
+        from PIL import ImageFilter
+
+        rng = np.random.default_rng(5)
+        sharp, blurred = [], []
+        for index in range(3):
+            array = (
+                np.tile(np.linspace(0, 255, 600), (600, 1))[:, :, None].repeat(3, 2)
+                + rng.normal(0, 30, (600, 600, 3))
+            ).clip(0, 255).astype(np.uint8)
+            array[150:400, 100:500] = (210, 90, 50)
+            path = tmp_path / f"sharp_{index}.jpg"
+            Image.fromarray(array).save(path)
+            sharp.append(str(path))
+
+            flat = Image.fromarray(np.full((600, 600, 3), (120, 120, 125), np.uint8))
+            path = tmp_path / f"blur_{index}.jpg"
+            flat.filter(ImageFilter.GaussianBlur(12)).save(path)
+            blurred.append(str(path))
+        return sharp, blurred
+
+    def test_ranking_is_exposed(self, mixed_photos):
+        from core.smart_cover_design import get_smart_cover_designer
+
+        sharp, blurred = mixed_photos
+        ranked = get_smart_cover_designer().rank_cover_candidates(
+            [], [{"path": p, "final_score": 0.5} for p in sharp + blurred]
+        )
+        assert len(ranked) == 6
+        scores = [item["cover_score"] for item in ranked]
+        assert scores == sorted(scores, reverse=True), "candidates are not ranked"
+
+    def test_the_better_material_is_the_material_rendered(self, mixed_photos):
+        from pathlib import Path
+
+        from core.cover_pipeline import build_cover
+
+        sharp, blurred = mixed_photos
+        result = build_cover(
+            photos=[{"path": p, "final_score": 0.5} for p in sharp + blurred],
+            title="自动选材", image_count=3,
+        )
+        cover = Path((result.get("data") or {}).get("cover_path", ""))
+        try:
+            assert result["status"] == "success", result
+            used = {item["path"] for item in result["selection"] if item["used"]}
+            assert used == set(sharp), f"picked the blurred images: {used}"
+            assert cover.is_file()
+        finally:
+            cover.unlink(missing_ok=True)
+
+    def test_the_selection_is_reported(self, mixed_photos):
+        """Which frames won, and what they scored, should be inspectable."""
+        from pathlib import Path
+
+        from core.cover_pipeline import build_cover
+
+        sharp, _ = mixed_photos
+        result = build_cover(photos=[{"path": p} for p in sharp], title="t", image_count=2)
+        cover = Path((result.get("data") or {}).get("cover_path", ""))
+        try:
+            selection = result["selection"]
+            assert len(selection) == 3
+            assert sum(1 for item in selection if item["used"]) == 2
+            assert all("cover_score" in item for item in selection)
+        finally:
+            cover.unlink(missing_ok=True)
+
+    def test_no_material_degrades_visibly(self):
+        from core.cover_pipeline import build_cover
+        from core.degradation import is_degraded
+
+        result = build_cover(photos=[{"path": "/nope/missing.jpg"}], title="t")
+        assert result["status"] == "error"
+        assert is_degraded(result)
+
+    def test_duplicate_frames_are_collapsed(self, mixed_photos):
+        """Key frames from one clip are near-identical; a cover of six copies
+        of the same shot is not a cover."""
+        from pathlib import Path
+
+        from core.cover_pipeline import build_cover
+
+        sharp, _ = mixed_photos
+        duplicated = [{"path": sharp[0]} for _ in range(5)] + [{"path": sharp[1]}]
+        result = build_cover(photos=duplicated, title="t", image_count=4)
+        cover = Path((result.get("data") or {}).get("cover_path", ""))
+        try:
+            used = [item["path"] for item in result["selection"] if item["used"]]
+            assert len(used) == len(set(used)), used
+        finally:
+            cover.unlink(missing_ok=True)
