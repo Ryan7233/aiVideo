@@ -75,7 +75,13 @@ def test_every_ffmpeg_invocation_goes_through_the_gate():
     import pathlib
 
     offenders = []
-    for path in [*pathlib.Path("core").glob("*.py"), pathlib.Path("api/main.py")]:
+    scanned = [
+        *pathlib.Path("core").glob("*.py"),
+        *pathlib.Path("worker").glob("*.py"),
+        *pathlib.Path("routers").glob("*.py"),
+        pathlib.Path("api/main.py"),
+    ]
+    for path in scanned:
         if path.name == "concurrency.py":
             continue
         source = path.read_text(encoding="utf-8")

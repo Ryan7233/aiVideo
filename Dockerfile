@@ -26,6 +26,10 @@ RUN mkdir -p logs output_data input_data
 # 设置权限
 RUN chmod +x scripts/*.sh start_server.py
 
+# The application defaults to 127.0.0.1 so a developer machine is not
+# exposed; inside a container it must bind all interfaces to be reachable.
+ENV API_HOST=0.0.0.0
+
 # 暴露端口
 EXPOSE 8000
 

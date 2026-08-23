@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Import core processing functions from api.main
 # We'll create a shared processing module to avoid circular imports
+from core.concurrency import run_ffmpeg
 from core.config import MAX_FILE_SIZE
 from core.runtime import DOWNLOAD_DIR, OUTPUT_DIR, download_public_file, resolve_media_path, resolve_output_path
 
@@ -110,7 +111,7 @@ def process_video_async(self, url: str, min_sec: int = 15, max_sec: int = 25, wa
         ]
         
         logger.info(f"Running FFmpeg: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        result = run_ffmpeg(cmd, timeout=600)
         
         if result.returncode != 0:
             logger.error(f"FFmpeg failed: {result.stderr}")
@@ -378,7 +379,7 @@ def asr_smart_clipping_async(self, url: str, min_sec: int = 15, max_sec: int = 2
                 output_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = run_ffmpeg(cmd, timeout=300)
             if result.returncode != 0:
                 logger.error(f"FFmpeg error: {result.stderr}")
                 raise RuntimeError(f"视频处理失败: {result.stderr}")

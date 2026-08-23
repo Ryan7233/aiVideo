@@ -86,16 +86,32 @@ def test_downloads_are_swept(tree, monkeypatch):
 
 
 def test_finished_job_rows_are_pruned(tree, monkeypatch):
-    monkeypatch.setenv("JOB_RETENTION_DAYS", "-1")
+    import sqlite3
+
+    monkeypatch.setenv("JOB_RETENTION_DAYS", "1")
     done = job_store.create_job("multi_segment_clipping", {})
     job_store.mark_succeeded(done, {})
     pending = job_store.create_job("multi_segment_clipping", {})
+    with sqlite3.connect(str(job_store.DB_PATH)) as connection:
+        connection.execute(
+            "UPDATE jobs SET finished_at = '2000-01-01T00:00:00+00:00' WHERE id = ?", (done,)
+        )
 
     report = retention.run_sweep()
 
     assert report["removed_jobs"] == 1
     assert job_store.get_job(done) is None
     assert job_store.get_job(pending) is not None
+
+
+def test_zero_job_retention_keeps_everything(tree, monkeypatch):
+    """0 disables the rule; it used to mean "cutoff = now" and wipe the table."""
+    monkeypatch.setenv("JOB_RETENTION_DAYS", "0")
+    done = job_store.create_job("multi_segment_clipping", {})
+    job_store.mark_succeeded(done, {})
+
+    assert retention.run_sweep()["removed_jobs"] == 0
+    assert job_store.get_job(done) is not None
 
 
 def test_sweep_reports_errors_instead_of_raising(tree, monkeypatch):

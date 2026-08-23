@@ -19,6 +19,8 @@ except ImportError:
     WHISPER_AVAILABLE = False
     WhisperModel = None
 
+from core.env import env_bool, env_str
+
 logger = logging.getLogger(__name__)
 
 # Deliberately two characters. The prompt carries forward through
@@ -38,7 +40,7 @@ DEFAULT_SIMPLIFIED_PROMPT = "简体"
 
 def simplified_chinese_prompt() -> str:
     """Seed text that biases Whisper toward Simplified output."""
-    return os.getenv("ASR_INITIAL_PROMPT", DEFAULT_SIMPLIFIED_PROMPT)
+    return env_str("ASR_INITIAL_PROMPT", DEFAULT_SIMPLIFIED_PROMPT)
 
 
 
@@ -221,7 +223,7 @@ class WhisperASRService:
         be applied only when the audio really is Mandarin, instead of forcing
         a language and mangling everything else.
         """
-        if os.getenv("ASR_LANGUAGE_DETECTION", "true").lower() in {"0", "false", "no"}:
+        if not env_bool("ASR_LANGUAGE_DETECTION", True):
             return None
         try:
             from faster_whisper.audio import decode_audio

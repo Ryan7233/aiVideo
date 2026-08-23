@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ipaddress
-import os
 import socket
 from pathlib import Path
 from typing import Iterable, Optional
@@ -11,9 +10,11 @@ from urllib.parse import unquote, urlparse
 
 import requests
 
+from core.env import env_bool, env_path
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_ROOT = Path(os.getenv("AIVIDEO_DATA_DIR", PROJECT_ROOT)).expanduser().resolve()
+DATA_ROOT = env_path("AIVIDEO_DATA_DIR", PROJECT_ROOT).resolve()
 
 INPUT_DIR = DATA_ROOT / "input_data"
 DOWNLOAD_DIR = INPUT_DIR / "downloads"
@@ -57,7 +58,7 @@ def resolve_media_path(
     candidate = candidate.resolve()
 
     roots = tuple(allowed_roots or (INPUT_DIR, OUTPUT_DIR))
-    allow_unsafe = os.getenv("ALLOW_UNSAFE_LOCAL_PATHS", "false").lower() in {"1", "true", "yes"}
+    allow_unsafe = env_bool("ALLOW_UNSAFE_LOCAL_PATHS", False)
     if not allow_unsafe and not _is_within(candidate, roots):
         raise ValueError("文件路径必须位于 input_data 或 output_data 目录内")
     if must_exist and not candidate.is_file():
@@ -100,6 +101,50 @@ def validate_remote_url(url: str) -> str:
     return url.strip()
 
 
+def _peer_address(response) -> Optional[str]:
+    """The IP actually connected to, or None if it cannot be determined.
+
+    urllib3 does not expose this publicly. The accessors below are private and
+    may move between versions, which is why the caller fails closed and a test
+    asserts at least one of them still resolves.
+    """
+    candidates = (
+        lambda: response.raw._fp.fp.raw._sock,
+        lambda: response.raw._original_response.fp.raw._sock,
+        lambda: response.raw._connection.sock,
+    )
+    for accessor in candidates:
+        try:
+            sock = accessor()
+        except Exception:
+            continue
+        if sock is None:
+            continue
+        try:
+            return sock.getpeername()[0]
+        except Exception:
+            continue
+    return None
+
+
+def assert_public_peer(response) -> None:
+    """Reject a connection that actually landed on a private address.
+
+    validate_remote_url resolves the hostname, then requests resolves it again
+    when it connects; between the two, DNS can hand back an internal address.
+    Checking the peer closes that window, because it inspects the connection
+    that was really made rather than a name lookup.
+    """
+    peer = _peer_address(response)
+    if peer is None:
+        raise ValueError(
+            "无法确认远程连接的实际地址，出于安全考虑中止下载"
+            "（urllib3 内部结构可能已变化）"
+        )
+    if not ipaddress.ip_address(peer).is_global:
+        raise ValueError(f"远程主机解析到非公网地址: {peer}")
+
+
 def download_public_file(url: str, destination: Path, max_bytes: int) -> Path:
     """Stream a public URL to disk while validating every redirect target."""
     current = validate_remote_url(url)
@@ -107,6 +152,11 @@ def download_public_file(url: str, destination: Path, max_bytes: int) -> Path:
 
     for _ in range(6):
         response = requests.get(current, stream=True, timeout=(10, 120), allow_redirects=False)
+        try:
+            assert_public_peer(response)
+        except Exception:
+            response.close()
+            raise
         if response.is_redirect or response.is_permanent_redirect:
             next_url = response.headers.get("location")
             response.close()

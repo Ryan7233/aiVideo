@@ -87,6 +87,48 @@ def test_no_fake_async_media_helpers(coroutine_routes):
     )
 
 
+def test_no_await_on_a_synchronous_function():
+    """`await f()` where f is a plain function raises at runtime.
+
+    Converting the media helpers from fake-async left two of these behind. The
+    first check only compared names within a single file, so it missed
+    api/main.py awaiting a function defined in core/ -- which is exactly how
+    /xiaohongshu/render_page?mode=single kept returning 500. This one resolves
+    across modules.
+    """
+    import pathlib
+
+    files = (
+        list(pathlib.Path("core").glob("*.py"))
+        + list(pathlib.Path("routers").glob("*.py"))
+        + list(pathlib.Path("worker").glob("*.py"))
+        + [pathlib.Path("api/main.py")]
+    )
+
+    sync_defs, async_defs = {}, set()
+    for path in files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                sync_defs.setdefault(node.name, set()).add(path.name)
+            elif isinstance(node, ast.AsyncFunctionDef):
+                async_defs.add(node.name)
+
+    offenders = []
+    for path in files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Await) or not isinstance(node.value, ast.Call):
+                continue
+            func = node.value.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            if name and name in sync_defs and name not in async_defs:
+                where = ", ".join(sorted(sync_defs[name]))
+                offenders.append(f"{path}:{node.lineno} awaits {name}() (sync def in {where})")
+
+    assert not offenders, offenders
+
+
 def test_pipeline_bodies_stay_synchronous(coroutine_routes):
     """The extracted helpers must remain plain functions a thread can run."""
     tree = ast.parse(API_MAIN.read_text(encoding="utf-8"))

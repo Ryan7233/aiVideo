@@ -124,10 +124,13 @@ def run_sweep() -> Dict[str, object]:
     _sweep_directory(VIDEO_UPLOAD_DIR, upload_retention_days(), report, recursive=True)
     _sweep_directory(DOWNLOAD_DIR, output_retention_days(), report, recursive=True)
 
-    try:
-        report.removed_jobs = job_store.delete_jobs_older_than(int(job_retention_days()))
-    except Exception as exc:
-        report.errors.append(f"job store: {exc}")
+    # 0 disables the rule, exactly as it does for the file sweeps above.
+    job_days = job_retention_days()
+    if job_days > 0:
+        try:
+            report.removed_jobs = job_store.delete_jobs_older_than(job_days)
+        except Exception as exc:
+            report.errors.append(f"job store: {exc}")
 
     summary = report.as_dict()
     if report.removed_files or report.removed_jobs:

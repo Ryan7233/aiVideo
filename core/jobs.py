@@ -13,13 +13,14 @@ does not care which one ran the work.
 from __future__ import annotations
 
 import logging
-import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional
 
 from core import job_store
 from core.concurrency import MAX_CONCURRENT_MEDIA_JOBS
+
+from core.env import env_str
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ _executor: Optional[ThreadPoolExecutor] = None
 
 def backend_name() -> str:
     """Which backend submissions go to. Read per call so tests can flip it."""
-    return os.getenv("JOB_BACKEND", "thread").strip().lower()
+    return env_str("JOB_BACKEND", "thread").lower()
 
 
 def register_job_handler(kind: str, handler: JobHandler) -> None:

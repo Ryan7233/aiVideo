@@ -16,10 +16,11 @@ a private-use codepoint no font defines. If they match, the glyph is missing.
 from __future__ import annotations
 
 import logging
-import os
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional
+
+from core.env import env_str
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ def _can_render_cjk(path: str) -> bool:
 @lru_cache(maxsize=1)
 def find_cjk_font() -> Optional[str]:
     """Path to a Chinese-capable font, or None. Result is cached."""
-    override = os.getenv("AIVIDEO_CJK_FONT", "").strip()
+    override = env_str("AIVIDEO_CJK_FONT")
     if override:
         if Path(override).is_file() and _can_render_cjk(override):
             logger.info("Using AIVIDEO_CJK_FONT: %s", override)

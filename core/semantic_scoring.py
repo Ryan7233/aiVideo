@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -23,6 +22,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from core.semantic_analysis import get_semantic_analyzer
 from core.text_tokenizer import tokenize
+
+from core.env import env_int, env_str
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +44,12 @@ class WindowScore:
 
 def scoring_mode() -> str:
     """``auto`` (LLM when configured), ``llm`` (require it) or ``rules``."""
-    mode = os.getenv("SEMANTIC_SCORING_MODE", "auto").strip().lower()
+    mode = env_str("SEMANTIC_SCORING_MODE", "auto").lower()
     return mode if mode in {"auto", "llm", "rules"} else "auto"
 
 
 def _batch_size() -> int:
-    try:
-        return max(1, min(int(os.getenv("SEMANTIC_SCORING_BATCH", DEFAULT_BATCH_SIZE)), 50))
-    except ValueError:
-        return DEFAULT_BATCH_SIZE
+    return max(1, min(env_int("SEMANTIC_SCORING_BATCH", DEFAULT_BATCH_SIZE), 50))
 
 
 def topic_terms(topic: str) -> List[str]:

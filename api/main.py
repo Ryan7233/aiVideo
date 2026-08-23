@@ -1138,13 +1138,41 @@ class ProContentReq(BaseModel):
     style: str = "professional"
     target_audience: str = "general"
 
+# Canvas and batch limits for the image endpoints. Pillow allocates
+# width * height * 3 bytes up front, so an unbounded request is a
+# straightforward way to exhaust the box: 10^9 x 10^9 was accepted.
+MAX_CANVAS_EDGE = 8192
+MAX_CANVAS_PIXELS = 16_000_000      # ~4000x4000
+MAX_COLLAGE_IMAGES = 50
+MAX_TEXT_BLOCKS = 30
+
+
+def _validate_canvas(width: int, height: int) -> None:
+    if width * height > MAX_CANVAS_PIXELS:
+        raise ValueError(
+            f"画布像素数不能超过 {MAX_CANVAS_PIXELS}（当前 {width}x{height}）"
+        )
+
+
 class AdvancedCollageReq(BaseModel):
-    images: List[str]  # 图片路径列表
+    images: List[str] = Field(..., min_length=1, max_length=MAX_COLLAGE_IMAGES)
     title: str
     layout_type: str = "dynamic"  # dynamic, grid, magazine, mosaic, creative
     style: str = "modern"  # modern, vintage, artistic, minimal
     color_scheme: str = "auto"  # auto, warm, cool, monochrome, vibrant
     canvas_size: List[int] = [800, 800]
+
+    @field_validator("canvas_size")
+    @classmethod
+    def validate_canvas_size(cls, value):
+        if len(value) != 2:
+            raise ValueError("canvas_size 必须是 [宽, 高]")
+        width, height = value
+        for edge in value:
+            if not 1 <= edge <= MAX_CANVAS_EDGE:
+                raise ValueError(f"画布边长必须在 1 到 {MAX_CANVAS_EDGE} 之间")
+        _validate_canvas(width, height)
+        return value
     add_effects: bool = True
     add_text_overlay: bool = True
     extra_text: Optional[str] = ""
@@ -1158,19 +1186,26 @@ class AdvancedCollageReq(BaseModel):
         return [str(resolve_media_path(path)) for path in value]
 
 class XiaohongshuCollageReq(BaseModel):
-    images: List[str]
+    images: List[str] = Field(..., min_length=1, max_length=MAX_COLLAGE_IMAGES)
     title: str
     subtitle: str = ""
     layout: str = "magazine_style"
     color_scheme: str = "xiaohongshu_pink"
-    width: int = 2160
-    height: int = 2160
-    quality: int = 95
-    custom_texts: List[Dict[str, Any]] = []
+    width: int = Field(2160, ge=1, le=MAX_CANVAS_EDGE)
+    height: int = Field(2160, ge=1, le=MAX_CANVAS_EDGE)
+    quality: int = Field(95, ge=1, le=100)
+    custom_texts: List[Dict[str, Any]] = Field(default_factory=list, max_length=MAX_TEXT_BLOCKS)
     # 新增：标题排版控制
     title_position: str = "center_overlay"  # center_overlay | top
     font_path: Optional[str] = None
-    overlay_texts: List[Dict[str, Any]] = []  # 额外文案块，锚点定位
+    overlay_texts: List[Dict[str, Any]] = Field(
+        default_factory=list, max_length=MAX_TEXT_BLOCKS
+    )  # 额外文案块，锚点定位
+
+    @model_validator(mode="after")
+    def validate_total_pixels(self):
+        _validate_canvas(self.width, self.height)
+        return self
 
     @field_validator("images")
     @classmethod
@@ -1987,7 +2022,7 @@ def _run_xiaohongshu_pipeline_pro(req: XHSProPipelineReq, input_path: str, ts: i
         logger.info("步骤2Pro: 语义高光检测...")
         detector = get_semantic_highlight_detector()
         semantic_highlights = detector.detect_highlights(
-            transcription_result.get('segments', []), 
+            transcription_result.get('segments', []),
             {'city': req.city, 'style': req.style}
         )
         pipeline_result['semantic_highlights'] = semantic_highlights
@@ -2124,7 +2159,7 @@ def _run_xiaohongshu_pipeline_pro(req: XHSProPipelineReq, input_path: str, ts: i
         logger.info("步骤6Pro: 个性化文案生成...")
         writing_service = get_personalized_writing_service()
         draft = writing_service.generate_personalized_content(
-            req.user_id, 
+            req.user_id,
             {'storyline': storyline, 'city': req.city, 'style': req.style},
             req.style
         )
@@ -2145,7 +2180,7 @@ def _run_xiaohongshu_pipeline_pro(req: XHSProPipelineReq, input_path: str, ts: i
         logger.info("步骤8Pro: 智能封面设计...")
         cover_designer = get_smart_cover_designer()
         cover_suggestions = cover_designer.generate_smart_cover(
-            generated_clips, pipeline_result['photos_ranked'], 
+            generated_clips, pipeline_result['photos_ranked'],
             pipeline_result['draft']['title'], req.style
         )
         pipeline_result['cover'] = cover_suggestions
@@ -2154,7 +2189,7 @@ def _run_xiaohongshu_pipeline_pro(req: XHSProPipelineReq, input_path: str, ts: i
         logger.info("步骤8: 基础封面建议...")
         cover_service = get_cover_service()
         cover_suggestions = cover_service.suggest_cover(
-            generated_clips, pipeline_result['photos_ranked'], 
+            generated_clips, pipeline_result['photos_ranked'],
             pipeline_result['draft']['title']
         )
         pipeline_result['cover'] = cover_suggestions
@@ -2975,16 +3010,23 @@ async def get_xiaohongshu_layouts():
 
 # 单页渲染（单图或拼图）
 class PageRenderReq(BaseModel):
-    images: List[str]
+    images: List[str] = Field(..., min_length=1, max_length=MAX_COLLAGE_IMAGES)
     mode: str = "single"  # single | collage
     layout: str = "scrapbook"  # 当 mode=collage 时生效
     title: str = ""
     subtitle: str = ""
     title_position: str = "center_overlay"
-    overlay_texts: List[Dict[str, Any]] = []
-    width: int = 1080
-    height: int = 1080
-    quality: int = 95
+    overlay_texts: List[Dict[str, Any]] = Field(
+        default_factory=list, max_length=MAX_TEXT_BLOCKS
+    )
+    width: int = Field(1080, ge=1, le=MAX_CANVAS_EDGE)
+    height: int = Field(1080, ge=1, le=MAX_CANVAS_EDGE)
+    quality: int = Field(95, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def validate_total_pixels(self):
+        _validate_canvas(self.width, self.height)
+        return self
 
     @field_validator("images")
     @classmethod
@@ -3000,30 +3042,34 @@ async def render_xhs_page(request: PageRenderReq):
         cfg = CollageConfig(width=request.width, height=request.height, quality=request.quality,
                             title_position=request.title_position)
         if request.mode == "single":
-            from PIL import Image as PILImage
-            img_paths = request.images
-            if not img_paths:
+            if not request.images:
                 raise HTTPException(status_code=400, detail="缺少图片")
-            canvas = PILImage.new('RGB', (cfg.width, cfg.height), '#FFFFFF')
-            p = resolve_media_path(img_paths[0])
-            im = PILImage.open(p)
-            if im.mode != 'RGB':
-                im = im.convert('RGB')
-            max_w = int(cfg.width*0.82)
-            max_h = int(cfg.height*0.68)
-            ratio = min(max_w/im.width, max_h/im.height)
-            new_size = (max(1,int(im.width*ratio)), max(1,int(im.height*ratio)))
-            im = im.resize(new_size, PILImage.Resampling.LANCZOS)
-            x = (cfg.width - im.width)//2
-            y = (cfg.height - im.height)//2 + 50
-            canvas.paste(im, (x,y))
-            # 标题与文案
-            xh.config_font_override = None
-            colors = xh.color_schemes['xiaohongshu_pink']
-            canvas = xh._add_main_texts(canvas, request.title, request.subtitle, colors, cfg)
-            if request.overlay_texts:
-                canvas = xh._draw_text_blocks(canvas, request.overlay_texts, colors, cfg)
-            out_path, b64 = await xh._save_high_quality_image(canvas, cfg)
+
+            def _render_single():
+                from PIL import Image as PILImage
+
+                canvas = PILImage.new('RGB', (cfg.width, cfg.height), '#FFFFFF')
+                source = PILImage.open(resolve_media_path(request.images[0]))
+                if source.mode != 'RGB':
+                    source = source.convert('RGB')
+                ratio = min(int(cfg.width * 0.82) / source.width,
+                            int(cfg.height * 0.68) / source.height)
+                source = source.resize(
+                    (max(1, int(source.width * ratio)), max(1, int(source.height * ratio))),
+                    PILImage.Resampling.LANCZOS,
+                )
+                canvas.paste(source, ((cfg.width - source.width) // 2,
+                                      (cfg.height - source.height) // 2 + 50))
+
+                xh.config_font_override = None
+                colors = xh.color_schemes['xiaohongshu_pink']
+                canvas = xh._add_main_texts(canvas, request.title, request.subtitle, colors, cfg)
+                if request.overlay_texts:
+                    canvas = xh._draw_text_blocks(canvas, request.overlay_texts, colors, cfg)
+                return xh._save_high_quality_image(canvas, cfg)
+
+            # Pillow work: keep it off the event loop.
+            out_path, b64 = await asyncio.to_thread(_render_single)
             return {"success": True, "image_path": str(out_path), "base64_data": b64, "mode": request.mode}
         else:
             # Pillow work: keep it off the event loop.

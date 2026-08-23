@@ -1,33 +1,41 @@
 import os
+
 from dotenv import load_dotenv
+
+from core.env import env_int, env_list, env_str
 
 # Load environment variables
 load_dotenv()
 
+# Bind to loopback by default. The container images set API_HOST=0.0.0.0
+# explicitly; a developer running start_server.py on a shared network should
+# not be publishing an unauthenticated upload and transcoding endpoint.
+DEFAULT_API_HOST = "127.0.0.1"
+
 # API Configuration
-API_HOST = os.getenv("API_HOST", "0.0.0.0")
-API_PORT = int(os.getenv("API_PORT", 8000))
-GEMINI_API_BASE = os.getenv("GEMINI_API_BASE", "http://localhost:8080")
-CUT_API_BASE = os.getenv("CUT_API_BASE", "http://localhost:8081")
+API_HOST = env_str("API_HOST", DEFAULT_API_HOST)
+API_PORT = env_int("API_PORT", 8000)
+GEMINI_API_BASE = env_str("GEMINI_API_BASE", "http://localhost:8080")
+CUT_API_BASE = env_str("CUT_API_BASE", "http://localhost:8081")
 
 # Video Processing Configuration
-MIN_CLIP_DURATION = int(os.getenv("MIN_CLIP_DURATION", 25))
-MAX_CLIP_DURATION = int(os.getenv("MAX_CLIP_DURATION", 60))
-VIDEO_FPS = int(os.getenv("VIDEO_FPS", 30))
-VIDEO_CRF = int(os.getenv("VIDEO_CRF", 23))
-AUDIO_BITRATE = os.getenv("AUDIO_BITRATE", "128k")
+MIN_CLIP_DURATION = env_int("MIN_CLIP_DURATION", 25)
+MAX_CLIP_DURATION = env_int("MAX_CLIP_DURATION", 60)
+VIDEO_FPS = env_int("VIDEO_FPS", 30)
+VIDEO_CRF = env_int("VIDEO_CRF", 23)
+AUDIO_BITRATE = env_str("AUDIO_BITRATE", "128k")
 
 # Storage Configuration
-UPLOAD_BUCKET = os.getenv("UPLOAD_BUCKET", "clips")
-UPLOAD_BASE_URL = os.getenv("UPLOAD_BASE_URL", "https://storage.example.com")
+UPLOAD_BUCKET = env_str("UPLOAD_BUCKET", "clips")
+UPLOAD_BASE_URL = env_str("UPLOAD_BASE_URL", "https://storage.example.com")
 
 # Celery/Queue Configuration
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/1")
+CELERY_BROKER_URL = env_str("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
+CELERY_RESULT_BACKEND = env_str("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/1")
 
 # Security Configuration
-ALLOWED_VIDEO_EXTENSIONS = os.getenv("ALLOWED_VIDEO_EXTENSIONS", ".mp4,.avi,.mov,.mkv").split(",")
-MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", 500 * 1024 * 1024))  # 500MB in bytes
+ALLOWED_VIDEO_EXTENSIONS = env_list("ALLOWED_VIDEO_EXTENSIONS", ".mp4,.avi,.mov,.mkv")
+MAX_FILE_SIZE = env_int("MAX_FILE_SIZE", 500 * 1024 * 1024)  # 500MB in bytes
 
 # AI Prompts
 SEGMENT_PROMPT = """你是短视频切片专家。基于带时间戳字幕，给出{min_sec}~{max_sec}秒的切片区间。

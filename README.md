@@ -264,6 +264,8 @@ tests/                      API 表面、安全边界、中文评分、任务流
 
 ```bash
 pip install -r requirements-dev.txt   # 运行时依赖 + 测试依赖
+# 需要完全可复现的安装时用锁文件（本分支在 Python 3.13 上验证过的精确版本）：
+# pip install -r requirements.lock.txt
 pytest -q
 python -m compileall -q api core routers worker tests
 python -m pyflakes api core routers worker tests scripts *.py

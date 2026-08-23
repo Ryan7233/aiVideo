@@ -116,13 +116,22 @@ class TestJobStore:
         assert job_store.get_job(job_id)["status"] == job_store.CANCELLED
 
     def test_retention_only_drops_finished_jobs(self):
+        import sqlite3
+
         live = job_store.create_job("multi_segment_clipping", {})
         done = job_store.create_job("multi_segment_clipping", {})
         job_store.mark_succeeded(done, {})
 
-        assert job_store.delete_jobs_older_than(days=365) == 0
-        assert job_store.delete_jobs_older_than(days=-1) == 1
-        assert job_store.get_job(live) is not None
+        assert job_store.delete_jobs_older_than(365) == 0, "a fresh job was swept"
+
+        with sqlite3.connect(str(job_store.DB_PATH)) as connection:
+            connection.execute(
+                "UPDATE jobs SET finished_at = '2000-01-01T00:00:00+00:00' WHERE id = ?",
+                (done,),
+            )
+
+        assert job_store.delete_jobs_older_than(1) == 1
+        assert job_store.get_job(live) is not None, "an unfinished job was swept"
         assert job_store.get_job(done) is None
 
 

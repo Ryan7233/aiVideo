@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sqlite3
 import threading
 import time
@@ -23,9 +22,11 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from core.runtime import DATA_ROOT
 
+from core.env import env_path
+
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path(os.getenv("AIVIDEO_DB_PATH", str(DATA_ROOT / "aivideo.db")))
+DB_PATH = env_path("AIVIDEO_DB_PATH", DATA_ROOT / "aivideo.db")
 
 PENDING = "pending"
 RUNNING = "running"
@@ -227,8 +228,15 @@ def is_cancelled(job_id: str) -> bool:
     return bool(job and job["status"] == CANCELLED)
 
 
-def delete_jobs_older_than(days: int) -> int:
-    """Drop finished job records past the retention window."""
+def delete_jobs_older_than(days: float) -> int:
+    """Drop finished job records past the retention window.
+
+    ``days`` is a float: truncating 0.5 to 0 made the cutoff "now" and wiped
+    every finished job. Callers decide whether the rule is enabled; this only
+    refuses a non-positive window so it can never mean "delete everything".
+    """
+    if days <= 0:
+        return 0
     cutoff = datetime.fromtimestamp(time.time() - days * 86400, tz=timezone.utc).isoformat()
     with _connect() as connection:
         cursor = connection.execute(

@@ -27,6 +27,9 @@ RUN mkdir -p logs input_data/downloads input_data/uploads output_data/uploads mo
 # 设置环境变量
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
+# The application defaults to 127.0.0.1 so a developer machine is not
+# exposed; inside a container it must bind all interfaces to be reachable.
+ENV API_HOST=0.0.0.0
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

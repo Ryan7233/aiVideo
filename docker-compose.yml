@@ -7,7 +7,8 @@ services:
     container_name: ai-video-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      # Loopback only: this Redis has no password set.
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
@@ -28,7 +29,9 @@ services:
     container_name: ai-video-api
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # Loopback only. Use the production profile (nginx) to expose it,
+      # and set AIVIDEO_API_KEY first -- the API has no auth without it.
+      - "127.0.0.1:8000:8000"
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
@@ -36,6 +39,7 @@ services:
       - REDIS_PORT=6379
       - JOB_BACKEND=celery
       - AIVIDEO_DB_PATH=/app/state/aivideo.db
+      - AIVIDEO_API_KEY=${AIVIDEO_API_KEY:-}
     volumes:
       - ./input_data:/app/input_data
       - ./output_data:/app/output_data
@@ -59,7 +63,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
-    container_name: ai-video-worker
+    # No container_name: it conflicts with replicas -- Docker cannot give two
+    # containers the same name, so `deploy.replicas: 2` silently yields one.
     restart: unless-stopped
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -69,6 +74,7 @@ services:
       - C_FORCE_ROOT=1
       - JOB_BACKEND=celery
       - AIVIDEO_DB_PATH=/app/state/aivideo.db
+      - AIVIDEO_API_KEY=${AIVIDEO_API_KEY:-}
     volumes:
       - ./input_data:/app/input_data
       - ./output_data:/app/output_data
@@ -92,6 +98,9 @@ services:
       resources:
         limits:
           memory: 4G  # Whisper需要更多内存
+    # MAX_CONCURRENT_MEDIA_JOBS is a per-process semaphore, so the real cap on
+    # concurrent FFmpeg processes is replicas x concurrency x that value.
+    # Size it against the host, not against one container.
 
   # Flower监控服务
   flower:
@@ -101,7 +110,7 @@ services:
     container_name: ai-video-flower
     restart: unless-stopped
     ports:
-      - "5555:5555"
+      - "127.0.0.1:5555:5555"
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
@@ -126,8 +135,8 @@ services:
     container_name: ai-video-minio
     restart: unless-stopped
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-change-me-before-use}
@@ -159,7 +168,6 @@ services:
       - ./output_data:/var/www/static:ro
     depends_on:
       - api
-      - flower
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/health"]
       interval: 30s
@@ -177,7 +185,7 @@ services:
     container_name: ai-video-prometheus
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -204,7 +212,7 @@ services:
     container_name: ai-video-grafana
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-change-me-before-use}
     volumes:

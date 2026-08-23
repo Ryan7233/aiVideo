@@ -6,9 +6,12 @@ spawns an analysis decode plus one encode per segment, so a handful of
 concurrent requests was enough to put dozens of FFmpeg processes on the box and
 starve everything, including the health check.
 
-This gate makes surplus requests queue instead. It is an interim measure: once
-the pipelines move onto Celery the worker concurrency setting takes over this
-job and this module can go away.
+This gate makes surplus requests queue instead.
+
+Scope: the semaphore is per process. With several Celery workers the effective
+cap is (workers x MAX_CONCURRENT_MEDIA_JOBS), so size it against the host
+rather than against one container. A cluster-wide limit would need the counter
+in Redis; that is worth doing only once more than one machine is involved.
 """
 
 from __future__ import annotations
@@ -20,6 +23,8 @@ import threading
 from contextlib import contextmanager
 from typing import Iterator, List, Optional
 
+from core.env import env_float, env_int
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,8 +33,8 @@ def _default_slots() -> int:
     return max(1, cpus // 2)
 
 
-MAX_CONCURRENT_MEDIA_JOBS = max(1, int(os.getenv("MAX_CONCURRENT_MEDIA_JOBS", str(_default_slots()))))
-MEDIA_SLOT_TIMEOUT = float(os.getenv("MEDIA_SLOT_TIMEOUT", "1800"))
+MAX_CONCURRENT_MEDIA_JOBS = max(1, env_int("MAX_CONCURRENT_MEDIA_JOBS", _default_slots()))
+MEDIA_SLOT_TIMEOUT = env_float("MEDIA_SLOT_TIMEOUT", 1800.0)
 
 _slots = threading.BoundedSemaphore(MAX_CONCURRENT_MEDIA_JOBS)
 
