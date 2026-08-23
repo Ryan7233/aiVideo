@@ -92,7 +92,7 @@ class SmartCoverGenerator:
 
         return self.color_themes.get(theme, self.color_themes["pink_gradient"]), theme
 
-    async def generate_cover(
+    def generate_cover(
         self,
         images: List[str],
         title: str,

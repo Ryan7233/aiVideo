@@ -20,7 +20,7 @@ class XiaohongshuPublisher:
         self.user_id = None
         
     
-    async def publish_note(
+    def publish_note(
         self,
         title: str,
         content: str,
@@ -55,7 +55,7 @@ class XiaohongshuPublisher:
             # 上传图片
             uploaded_images = []
             for image_path in images:
-                upload_result = await self._upload_image(image_path)
+                upload_result = self._upload_image(image_path)
                 if upload_result["status"] in {"success", "simulation"}:
                     uploaded_images.append(upload_result["data"]["image_id"])
                 else:
@@ -107,7 +107,7 @@ class XiaohongshuPublisher:
                 "message": f"发布失败: {str(e)}"
             }
     
-    async def _upload_image(self, image_path: str) -> Dict[str, Any]:
+    def _upload_image(self, image_path: str) -> Dict[str, Any]:
         """
         上传图片到小红书
         

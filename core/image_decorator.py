@@ -53,7 +53,7 @@ class ImageDecorator:
             "beauty": "💄", "fashion": "👗", "fitness": "💪", "coffee": "☕"
         }
     
-    async def decorate_image(
+    def decorate_image(
         self,
         image_path: str,
         decorations: Dict[str, Any]
@@ -292,7 +292,7 @@ class ImageDecorator:
         except Exception as e:
             logger.warning(f"装饰元素添加失败: {str(e)}")
     
-    async def generate_smart_decorations(
+    def generate_smart_decorations(
         self,
         theme: str,
         content_type: str,

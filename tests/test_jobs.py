@@ -233,3 +233,77 @@ class TestPipelineJobHandlers:
             assert observed == [{"step": "processing"}]
         finally:
             source.unlink(missing_ok=True)
+
+
+class TestStatusTransitions:
+    """A terminal status is final.
+
+    The API dispatched to Celery and then called mark_running(). A worker that
+    finished or failed first had its result overwritten back to "running", so
+    the poller waited forever; a cancel could likewise be overwritten by a late
+    failure. Every transition is now guarded in SQL rather than by a
+    read-then-write, because the API process and the worker race on one row.
+    """
+
+    def test_finished_job_cannot_be_pulled_back_to_running(self):
+        job_id = job_store.create_job("multi_segment_clipping", {}, backend="celery")
+        job_store.mark_succeeded(job_id, {"output_video": "a.mp4"})
+
+        assert job_store.mark_running(job_id) is False
+        job = job_store.get_job(job_id)
+        assert job["status"] == job_store.SUCCEEDED
+        assert job["result"]["output_video"] == "a.mp4"
+
+    def test_failed_job_cannot_be_pulled_back_to_running(self):
+        job_id = job_store.create_job("multi_segment_clipping", {})
+        job_store.mark_failed(job_id, "boom")
+
+        assert job_store.mark_running(job_id) is False
+        assert job_store.get_job(job_id)["status"] == job_store.FAILED
+
+    def test_cancel_beats_a_late_failure(self):
+        job_id = job_store.create_job("multi_segment_clipping", {})
+        job_store.mark_cancelled(job_id)
+
+        assert job_store.mark_failed(job_id, "worker died") is False
+        assert job_store.get_job(job_id)["status"] == job_store.CANCELLED
+
+    def test_cancel_beats_a_late_success(self):
+        job_id = job_store.create_job("multi_segment_clipping", {})
+        job_store.mark_cancelled(job_id)
+
+        assert job_store.mark_succeeded(job_id, {"output_video": "a.mp4"}) is False
+        job = job_store.get_job(job_id)
+        assert job["status"] == job_store.CANCELLED
+        assert job["result"] is None
+
+    def test_a_cancelled_job_never_starts(self):
+        job_id = job_store.create_job("multi_segment_clipping", {})
+        job_store.mark_cancelled(job_id)
+        ran = []
+
+        jobs.register_job_handler("_transition_probe", lambda params, jid: ran.append(1) or {})
+        try:
+            outcome = jobs.run_job("_transition_probe", {}, job_id)
+        finally:
+            jobs._handlers.pop("_transition_probe", None)
+
+        assert ran == [], "work started on a job that was already cancelled"
+        assert outcome["status"] == job_store.CANCELLED
+
+    def test_dispatch_records_the_task_id_without_touching_status(self):
+        """submit() must not own the status; the executor does."""
+        job_id = job_store.create_job("multi_segment_clipping", {}, backend="celery")
+        job_store.mark_succeeded(job_id, {})
+
+        job_store.set_external_id(job_id, "celery-task-123")
+
+        job = job_store.get_job(job_id)
+        assert job["external_id"] == "celery-task-123"
+        assert job["status"] == job_store.SUCCEEDED
+
+    def test_running_is_idempotent(self):
+        job_id = job_store.create_job("multi_segment_clipping", {})
+        assert job_store.mark_running(job_id) is True
+        assert job_store.mark_running(job_id) is True
+        assert job_store.get_job(job_id)["status"] == job_store.RUNNING

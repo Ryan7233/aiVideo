@@ -64,26 +64,32 @@ def _get_executor() -> ThreadPoolExecutor:
 
 
 def run_job(kind: str, params: Dict[str, Any], job_id: str) -> Dict[str, Any]:
-    """Execute one job and record the outcome. Never raises."""
-    if job_store.is_cancelled(job_id):
-        logger.info("Job %s was cancelled before it started", job_id)
-        return {"status": "cancelled"}
+    """Execute one job and record the outcome. Never raises.
 
-    job_store.mark_running(job_id)
+    Claiming the job and checking it was not cancelled are the same atomic
+    write; a read-then-write here could start work a cancel had already
+    landed on.
+    """
+    if not job_store.mark_running(job_id):
+        current = (job_store.get_job(job_id) or {}).get("status", "unknown")
+        logger.info("Job %s not started; it is already %s", job_id, current)
+        return {"status": current}
+
     try:
         handler = get_handler(kind)
         result = handler(params, job_id)
     except Exception as exc:
         logger.exception("Job %s (%s) failed", job_id, kind)
-        job_store.mark_failed(job_id, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()[-2000:]}")
+        if not job_store.mark_failed(
+            job_id, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()[-2000:]}"
+        ):
+            # A cancel landed while the work was in flight; it wins.
+            return {"status": job_store.CANCELLED}
         return {"status": "failed", "error": str(exc)}
 
-    # A cancel that landed mid-run wins; do not resurrect the job.
-    if job_store.is_cancelled(job_id):
+    if not job_store.mark_succeeded(job_id, result):
         logger.info("Job %s finished but had been cancelled; result discarded", job_id)
-        return {"status": "cancelled"}
-
-    job_store.mark_succeeded(job_id, result)
+        return {"status": job_store.CANCELLED}
     return {"status": "succeeded", "result": result}
 
 
@@ -97,7 +103,10 @@ def submit(kind: str, params: Dict[str, Any]) -> str:
         from worker.tasks import run_registered_job
 
         async_result = run_registered_job.delay(kind, params, job_id)
-        job_store.mark_running(job_id, external_id=async_result.id)
+        # Record the dispatch id only. The worker owns the status: a task that
+        # failed or finished before this line must not be pulled back to
+        # "running", which would leave the poller waiting forever.
+        job_store.set_external_id(job_id, async_result.id)
         logger.info("Dispatched job %s to Celery task %s", job_id, async_result.id)
     else:
         _get_executor().submit(run_job, kind, params, job_id)

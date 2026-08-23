@@ -1378,72 +1378,70 @@ async function generateSmartCover() {
     }
 
     const theme = document.getElementById('xhs-theme')?.value?.trim() || '精彩时刻';
-    const layout = document.getElementById('cover-layout')?.value || 'grid_3x3';
-    const colorTheme = document.getElementById('cover-theme')?.value || 'pink_gradient';
+    const layout = document.getElementById('cover-layout')?.value || 'auto';
+    const colorTheme = document.getElementById('cover-theme')?.value || 'auto';
 
     showToast('正在生成智能封面...', 'info');
 
     try {
-        // 调用真实的API
-        const formData = new FormData();
-        
-        // 准备图片文件路径（模拟上传后的路径）
-        const imagePaths = [];
-        for (let i = 0; i < xhsSelectedPhotos.length; i++) {
-            imagePaths.push(`temp_image_${i}.jpg`); // 模拟路径
+        // 照片必须先真正上传：后端只接受受管目录内的路径，之前这里传的是
+        // temp_image_0.jpg 这样的假路径，必然 422，然后静默退回本地 Canvas。
+        const form = new FormData();
+        xhsSelectedPhotos.forEach((photo) => form.append('files', photo));
+        const uploadResponse = await fetch('/upload/photos', { method: 'POST', body: form });
+        if (!uploadResponse.ok) {
+            throw new Error(`照片上传失败 (${uploadResponse.status})`);
         }
-        
-        const requestData = {
-            images: imagePaths,
-            title: theme,
-            subtitle: `精彩的${theme}时刻`,
-            layout: layout,
-            theme: colorTheme,
-            platform: 'xiaohongshu'
-        };
-        
+        const uploaded = await uploadResponse.json();
+        const imagePaths = (uploaded.files || []).map((file) => file.saved_path);
+        if (!imagePaths.length) {
+            throw new Error('没有可用的照片路径');
+        }
+
         const response = await fetch('/cover/generate', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(requestData)
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                images: imagePaths,
+                title: theme,
+                subtitle: `精彩的${theme}时刻`,
+                layout: layout,
+                theme: colorTheme,
+                platform: 'xiaohongshu'
+            })
         });
-        
+
         const result = await response.json();
-        
-        if (result.status === 'success') {
-            // 显示生成的封面
-            const coverContainer = document.getElementById('xhs-cover-container');
-            if (coverContainer && result.data.preview_base64) {
-                const coverImg = document.createElement('img');
-                coverImg.src = result.data.preview_base64;
-                coverImg.style.cssText = `
-                    max-width: 100%;
-                    max-height: 350px;
-                    border-radius: 12px;
-                    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
-                `;
-                
-                coverContainer.innerHTML = '';
-                coverContainer.appendChild(coverImg);
-            } else {
-                // 如果API返回失败，使用备用方案
-                generateFallbackCover(theme, layout, colorTheme);
-            }
-            
-            showToast('智能封面生成完成！', 'success');
-        } else {
-            // API调用失败，使用备用方案
-            generateFallbackCover(theme, layout, colorTheme);
-            showToast('封面生成完成（使用备用方案）', 'success');
+        if (!response.ok || result.status !== 'success' || !result.data?.preview_base64) {
+            throw new Error(result.detail || result.message || '封面生成失败');
         }
-        
+
+        const coverContainer = document.getElementById('xhs-cover-container');
+        if (coverContainer) {
+            const coverImg = document.createElement('img');
+            coverImg.src = result.data.preview_base64;
+            coverImg.alt = '智能封面';
+            coverImg.style.cssText = `
+                max-width: 100%;
+                max-height: 350px;
+                border-radius: 12px;
+                box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+            `;
+            // downloadCover() reads this; without it the download button
+            // reports "封面数据不可用" even on a successful render.
+            coverImg.setAttribute('data-canvas', result.data.full_base64 || result.data.preview_base64);
+            coverContainer.innerHTML = '';
+            coverContainer.appendChild(coverImg);
+        }
+
+        showToast('智能封面生成完成！', 'success');
+
     } catch (error) {
+        // Say which path produced the image. The old code reported success
+        // whatever happened, so a broken backend looked like a working one.
         console.error('封面生成错误:', error);
-        // 网络错误，使用备用方案
         generateFallbackCover(theme, layout, colorTheme);
-        showToast('封面生成完成', 'success');
+        showToast(`后端封面生成失败（${error.message}），已使用本地降级方案`, 'warning');
     }
 }
 

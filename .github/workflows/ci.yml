@@ -28,7 +28,7 @@ jobs:
         # than skipping; the runtime images install the same package.
         run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-noto-cjk
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
       - name: Python tests
         run: pytest -q
       - name: Static syntax checks

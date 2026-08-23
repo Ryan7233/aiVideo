@@ -125,30 +125,58 @@ def create_job(kind: str, params: Dict[str, Any], backend: str = "thread") -> st
     return job_id
 
 
-def mark_running(job_id: str, external_id: Optional[str] = None) -> None:
+# Once a job reaches one of these, nothing may move it again. Every write
+# below is guarded in SQL rather than by a read-then-write, because the API
+# process and the Celery worker both touch the same row: a worker that failed
+# fast could otherwise be dragged back to "running" by the dispatching side,
+# and the poller would never see the job finish.
+_TERMINAL_SQL = "(?, ?, ?)"
+_TERMINAL_ARGS = (SUCCEEDED, FAILED, CANCELLED)
+
+
+def set_external_id(job_id: str, external_id: str) -> None:
+    """Record the backend's own task id without touching the status."""
     with _connect() as connection:
         connection.execute(
+            "UPDATE jobs SET external_id = ? WHERE id = ?", (external_id, job_id)
+        )
+
+
+def mark_running(job_id: str, external_id: Optional[str] = None) -> bool:
+    """Move a job to running. False if it was already cancelled or finished."""
+    with _connect() as connection:
+        cursor = connection.execute(
             "UPDATE jobs SET status = ?, started_at = COALESCE(started_at, ?),"
-            " external_id = COALESCE(?, external_id) WHERE id = ?",
-            (RUNNING, _now(), external_id, job_id),
+            f" external_id = COALESCE(?, external_id) WHERE id = ? AND status NOT IN {_TERMINAL_SQL}",
+            (RUNNING, _now(), external_id, job_id, *_TERMINAL_ARGS),
         )
+        return cursor.rowcount > 0
 
 
-def mark_succeeded(job_id: str, result: Dict[str, Any]) -> None:
+def mark_succeeded(job_id: str, result: Dict[str, Any]) -> bool:
+    """Record success. False if the job had already reached a terminal state."""
     with _connect() as connection:
-        connection.execute(
-            "UPDATE jobs SET status = ?, result = ?, finished_at = ? WHERE id = ?",
-            (SUCCEEDED, json.dumps(result, ensure_ascii=False, default=str), _now(), job_id),
+        cursor = connection.execute(
+            "UPDATE jobs SET status = ?, result = ?, finished_at = ?"
+            f" WHERE id = ? AND status NOT IN {_TERMINAL_SQL}",
+            (SUCCEEDED, json.dumps(result, ensure_ascii=False, default=str), _now(),
+             job_id, *_TERMINAL_ARGS),
         )
+        return cursor.rowcount > 0
 
 
-def mark_failed(job_id: str, error: str) -> None:
+def mark_failed(job_id: str, error: str) -> bool:
+    """Record failure. False if the job had already reached a terminal state."""
     with _connect() as connection:
-        connection.execute(
-            "UPDATE jobs SET status = ?, error = ?, finished_at = ? WHERE id = ?",
-            (FAILED, error[:4000], _now(), job_id),
+        cursor = connection.execute(
+            "UPDATE jobs SET status = ?, error = ?, finished_at = ?"
+            f" WHERE id = ? AND status NOT IN {_TERMINAL_SQL}",
+            (FAILED, error[:4000], _now(), job_id, *_TERMINAL_ARGS),
         )
-    logger.warning("Job %s failed: %s", job_id, error[:400])
+        applied = cursor.rowcount > 0
+    if applied:
+        logger.warning("Job %s failed: %s", job_id, error[:400])
+    return applied
 
 
 def mark_cancelled(job_id: str) -> bool:

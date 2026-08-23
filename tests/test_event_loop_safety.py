@@ -57,6 +57,36 @@ def test_no_blocking_media_work_inside_coroutines(coroutine_routes):
     )
 
 
+def test_no_fake_async_media_helpers(coroutine_routes):
+    """`async def` with no await inside runs entirely on the caller's loop.
+
+    The cover and collage generators were declared async and contained only
+    Pillow, clustering and PNG encoding. Awaiting one from a route blocked
+    /health for the whole render. They are plain functions now, reached
+    through asyncio.to_thread; this keeps them that way.
+    """
+    import pathlib
+
+    offenders = []
+    for path in sorted(pathlib.Path("core").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            if any(isinstance(child, (ast.Await, ast.AsyncFor, ast.AsyncWith))
+                   for child in ast.walk(node)):
+                continue
+            body_lines = node.end_lineno - node.lineno
+            # Small stubs are harmless; the problem is real work on the loop.
+            if body_lines >= 20:
+                offenders.append(f"{path.name}::{node.name} ({body_lines} lines)")
+
+    assert not offenders, (
+        "these are declared async but never await, so they run synchronously "
+        f"on the event loop: {offenders}"
+    )
+
+
 def test_pipeline_bodies_stay_synchronous(coroutine_routes):
     """The extracted helpers must remain plain functions a thread can run."""
     tree = ast.parse(API_MAIN.read_text(encoding="utf-8"))

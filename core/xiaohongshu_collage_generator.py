@@ -197,7 +197,7 @@ class XiaohongshuCollageGenerator:
                 config = CollageConfig()
             
             # 加载图片
-            loaded_images = await self._load_and_process_images(images, config)
+            loaded_images = self._load_and_process_images(images, config)
             if not loaded_images:
                 raise ValueError("没有有效的图片")
             
@@ -229,7 +229,7 @@ class XiaohongshuCollageGenerator:
                 canvas = self._draw_text_blocks(canvas, overlay_texts, colors, config)
 
             # 保存高质量图片
-            output_path, base64_data = await self._save_high_quality_image(canvas, config)
+            output_path, base64_data = self._save_high_quality_image(canvas, config)
             
             logger.info(f"小红书级别拼图生成成功: {output_path}")
             
@@ -324,7 +324,7 @@ class XiaohongshuCollageGenerator:
                 continue
         return canvas
     
-    async def _load_and_process_images(self, image_paths: List[str], config: CollageConfig) -> List[Image.Image]:
+    def _load_and_process_images(self, image_paths: List[str], config: CollageConfig) -> List[Image.Image]:
         """加载和处理图片"""
         processed_images = []
         
@@ -375,7 +375,7 @@ class XiaohongshuCollageGenerator:
             logger.warning(f"图片质量增强失败: {e}")
             return img
     
-    async def _magazine_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
+    def _magazine_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
         """杂志风格布局"""
         if not images:
             return canvas
@@ -430,11 +430,11 @@ class XiaohongshuCollageGenerator:
             
         else:
             # 多图：网格布局
-            canvas = await self._grid_modern_layout(canvas, images, colors, config)
+            canvas = self._grid_modern_layout(canvas, images, colors, config)
         
         return canvas
     
-    async def _grid_modern_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
+    def _grid_modern_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
         """现代网格布局"""
         if not images:
             return canvas
@@ -480,25 +480,25 @@ class XiaohongshuCollageGenerator:
         
         return canvas
     
-    async def _story_flow_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
+    def _story_flow_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
         """故事流布局"""
         # 实现故事流式的图片排列
-        return await self._magazine_layout(canvas, images, colors, config)
+        return self._magazine_layout(canvas, images, colors, config)
     
-    async def _featured_main_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
+    def _featured_main_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
         """主图特色布局"""
         # 实现以主图为核心的布局
-        return await self._magazine_layout(canvas, images, colors, config)
+        return self._magazine_layout(canvas, images, colors, config)
     
-    async def _artistic_collage_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
+    def _artistic_collage_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
         """艺术拼贴布局"""
         # 实现艺术风格的拼贴
-        return await self._magazine_layout(canvas, images, colors, config)
+        return self._magazine_layout(canvas, images, colors, config)
     
-    async def _minimal_clean_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
+    def _minimal_clean_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
         """简约清新布局"""
         # 实现简约风格布局
-        return await self._magazine_layout(canvas, images, colors, config)
+        return self._magazine_layout(canvas, images, colors, config)
     
     def _resize_and_crop_smart(self, img: Image.Image, target_size: Tuple[int, int]) -> Image.Image:
         """智能缩放和裁剪"""
@@ -642,7 +642,7 @@ class XiaohongshuCollageGenerator:
             logger.warning(f"和纸胶带添加失败: {e}")
             return canvas
 
-    async def _scrapbook_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
+    def _scrapbook_layout(self, canvas: Image.Image, images: List[Image.Image], colors: Dict, config: CollageConfig) -> Image.Image:
         """手帐拼贴风布局：随机小角度旋转、轻微重叠、拍立得白边、和纸胶带与接缝阴影。"""
         if not images:
             return canvas
@@ -910,7 +910,7 @@ class XiaohongshuCollageGenerator:
             logger.warning(f"装饰边框添加失败: {e}")
             return canvas
     
-    async def _save_high_quality_image(self, canvas: Image.Image, config: CollageConfig) -> Tuple[Path, str]:
+    def _save_high_quality_image(self, canvas: Image.Image, config: CollageConfig) -> Tuple[Path, str]:
         """保存高质量图片"""
         try:
             # 生成唯一文件名

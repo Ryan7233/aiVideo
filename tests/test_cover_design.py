@@ -10,8 +10,6 @@ Three defects motivated these:
   built from fewer than nine images
 """
 
-import asyncio
-
 import pytest
 from PIL import Image, ImageFont
 
@@ -209,8 +207,8 @@ class TestRendering:
 
     def test_auto_theme_renders_and_reports_its_palette(self, photos):
         paths = photos([(34, 110, 45), (60, 140, 70), (25, 90, 38), (80, 160, 90)], "r")
-        result = asyncio.run(get_smart_cover_generator().generate_cover(
-            images=paths, title="周末露营好去处", subtitle="8个宝藏营地", theme="auto"))
+        result = get_smart_cover_generator().generate_cover(
+            images=paths, title="周末露营好去处", subtitle="8个宝藏营地", theme="auto")
         try:
             assert result["status"] == "success"
             palette = result["data"]["palette"]
@@ -222,8 +220,8 @@ class TestRendering:
             self._cleanup(result)
 
     def test_no_usable_images_is_an_error_not_a_crash(self):
-        result = asyncio.run(get_smart_cover_generator().generate_cover(
-            images=["/nope/a.jpg"], title="标题"))
+        result = get_smart_cover_generator().generate_cover(
+            images=["/nope/a.jpg"], title="标题")
         assert result["status"] == "error"
 
 

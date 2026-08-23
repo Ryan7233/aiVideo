@@ -60,7 +60,7 @@ class AdvancedCollageGenerator:
         """字体加载委托给 core.fonts，那里会真正验证中文渲染能力。"""
         return load_font(size)
     
-    async def generate_advanced_collage(
+    def generate_advanced_collage(
         self,
         images: List[str],  # 图片路径列表
         title: str,
@@ -77,7 +77,7 @@ class AdvancedCollageGenerator:
         
         try:
             # 加载和预处理图片
-            processed_images = await self._load_and_process_images(images)
+            processed_images = self._load_and_process_images(images)
             
             if not processed_images:
                 raise ValueError("没有有效的图片可以处理")
@@ -88,30 +88,30 @@ class AdvancedCollageGenerator:
             
             # 根据布局类型生成拼图
             if layout_type == "dynamic":
-                canvas = await self._create_dynamic_layout(canvas, processed_images, title, style)
+                canvas = self._create_dynamic_layout(canvas, processed_images, title, style)
             elif layout_type == "grid":
-                canvas = await self._create_grid_layout(canvas, processed_images, title, style)
+                canvas = self._create_grid_layout(canvas, processed_images, title, style)
             elif layout_type == "magazine":
-                canvas = await self._create_magazine_layout(canvas, processed_images, title, style)
+                canvas = self._create_magazine_layout(canvas, processed_images, title, style)
             elif layout_type == "mosaic":
-                canvas = await self._create_mosaic_layout(canvas, processed_images, title, style)
+                canvas = self._create_mosaic_layout(canvas, processed_images, title, style)
             elif layout_type == "creative":
-                canvas = await self._create_creative_layout(canvas, processed_images, title, style)
+                canvas = self._create_creative_layout(canvas, processed_images, title, style)
             elif layout_type == "treemap":
-                canvas = await self._create_treemap_layout(canvas, processed_images, title, style)
+                canvas = self._create_treemap_layout(canvas, processed_images, title, style)
             else:
-                canvas = await self._create_grid_layout(canvas, processed_images, title, style)
+                canvas = self._create_grid_layout(canvas, processed_images, title, style)
             
             # 应用颜色方案
-            canvas = await self._apply_color_scheme(canvas, color_scheme)
+            canvas = self._apply_color_scheme(canvas, color_scheme)
             
             # 添加效果
             if add_effects:
-                canvas = await self._add_visual_effects(canvas, style)
+                canvas = self._add_visual_effects(canvas, style)
             
             # 添加文字叠加
             if add_text_overlay:
-                canvas = await self._add_text_overlay(canvas, title, style, extra_text=extra_text, position=text_position)
+                canvas = self._add_text_overlay(canvas, title, style, extra_text=extra_text, position=text_position)
             
             # 转换为base64
             output_buffer = io.BytesIO()
@@ -141,7 +141,7 @@ class AdvancedCollageGenerator:
                 "fallback_available": True
             }
     
-    async def _load_and_process_images(self, image_paths: List[str]) -> List[Image.Image]:
+    def _load_and_process_images(self, image_paths: List[str]) -> List[Image.Image]:
         """加载和预处理图片"""
         processed_images = []
         
@@ -170,7 +170,7 @@ class AdvancedCollageGenerator:
         
         return processed_images
     
-    async def _create_dynamic_layout(
+    def _create_dynamic_layout(
         self, canvas: Image.Image, images: List[Image.Image], title: str, style: str
     ) -> Image.Image:
         """创建动态布局 - 根据图片数量和比例智能排列"""
@@ -270,11 +270,11 @@ class AdvancedCollageGenerator:
         
         elif img_count >= 4:
             # 多图：增强网格布局
-            canvas = await self._create_enhanced_grid_layout(canvas, images, title, style)
+            canvas = self._create_enhanced_grid_layout(canvas, images, title, style)
         
         return canvas
     
-    async def _create_enhanced_grid_layout(
+    def _create_enhanced_grid_layout(
         self, canvas: Image.Image, images: List[Image.Image], title: str, style: str
     ) -> Image.Image:
         """创建增强的网格布局"""
@@ -353,7 +353,7 @@ class AdvancedCollageGenerator:
         
         return canvas
     
-    async def _create_grid_layout(
+    def _create_grid_layout(
         self, canvas: Image.Image, images: List[Image.Image], title: str, style: str
     ) -> Image.Image:
         """创建网格布局"""
@@ -391,7 +391,7 @@ class AdvancedCollageGenerator:
         
         return canvas
     
-    async def _create_magazine_layout(
+    def _create_magazine_layout(
         self, canvas: Image.Image, images: List[Image.Image], title: str, style: str
     ) -> Image.Image:
         """创建杂志风格布局"""
@@ -442,7 +442,7 @@ class AdvancedCollageGenerator:
         
         return canvas
     
-    async def _create_mosaic_layout(
+    def _create_mosaic_layout(
         self, canvas: Image.Image, images: List[Image.Image], title: str, style: str
     ) -> Image.Image:
         """创建马赛克拼图布局"""
@@ -473,7 +473,7 @@ class AdvancedCollageGenerator:
         
         return canvas
     
-    async def _create_creative_layout(
+    def _create_creative_layout(
         self, canvas: Image.Image, images: List[Image.Image], title: str, style: str
     ) -> Image.Image:
         """创建创意布局 - 圆形、多边形等特殊形状"""
@@ -521,7 +521,7 @@ class AdvancedCollageGenerator:
         
         return canvas
 
-    async def _create_treemap_layout(
+    def _create_treemap_layout(
         self, canvas: Image.Image, images: List[Image.Image], title: str, style: str
     ) -> Image.Image:
         """树地图布局：根据图片权重按区域切分，形成混合尺寸的自然拼贴。"""
@@ -672,7 +672,7 @@ class AdvancedCollageGenerator:
         
         return regions
     
-    async def _apply_color_scheme(self, canvas: Image.Image, color_scheme: str) -> Image.Image:
+    def _apply_color_scheme(self, canvas: Image.Image, color_scheme: str) -> Image.Image:
         """应用颜色方案"""
         if color_scheme == "auto":
             return canvas
@@ -702,7 +702,7 @@ class AdvancedCollageGenerator:
         
         return canvas
     
-    async def _add_visual_effects(self, canvas: Image.Image, style: str) -> Image.Image:
+    def _add_visual_effects(self, canvas: Image.Image, style: str) -> Image.Image:
         """添加视觉效果"""
         if style == "vintage":
             # 复古效果
@@ -771,7 +771,7 @@ class AdvancedCollageGenerator:
         
         return bordered_img
 
-    async def _add_text_overlay(self, canvas: Image.Image, title: str, style: str, extra_text: str = "", position: str = "bottom") -> Image.Image:
+    def _add_text_overlay(self, canvas: Image.Image, title: str, style: str, extra_text: str = "", position: str = "bottom") -> Image.Image:
         """添加文字叠加"""
         draw = ImageDraw.Draw(canvas)
         

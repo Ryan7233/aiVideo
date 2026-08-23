@@ -15,6 +15,8 @@ import librosa
 from scipy import signal
 import random
 
+from core.concurrency import run_ffmpeg
+
 logger = logging.getLogger(__name__)
 
 # 尝试导入音频处理库
@@ -173,7 +175,7 @@ class AudioProcessingService:
                 str(audio_path)
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = run_ffmpeg(cmd, timeout=600)
             
             if result.returncode == 0 and audio_path.exists():
                 logger.info(f"音频提取成功: {audio_path}")
@@ -407,7 +409,7 @@ class AudioProcessingService:
                 str(enhanced_path)
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = run_ffmpeg(cmd, timeout=600)
             
             if result.returncode == 0 and enhanced_path.exists():
                 logger.info(f"语音增强完成: {enhanced_path}")
@@ -600,7 +602,7 @@ class AudioProcessingService:
                 output_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = run_ffmpeg(cmd, timeout=600)
             
             if result.returncode == 0 and Path(output_path).exists():
                 return output_path
@@ -692,7 +694,7 @@ class AudioProcessingService:
                 str(optimized_path)
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = run_ffmpeg(cmd, timeout=600)
             
             if result.returncode == 0 and optimized_path.exists():
                 logger.info(f"音频最终优化完成: {optimized_path}")

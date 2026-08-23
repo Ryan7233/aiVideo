@@ -331,7 +331,7 @@ def black_fraction_in_segment(path: str, start_hms: str, duration_s: float) -> f
             "-vf", "crop=in_w*0.9:in_h*0.9:(in_w-out_w)/2:(in_h-out_h)/2,blackdetect=d=0.3:pic_th=0.98",
             "-an", "-f", "null", "-"
         ]
-        completed = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=60)
+        completed = _run_ffmpeg_gated(cmd, timeout=60, encoding="utf-8")
         out = (completed.stdout or "") + "\n" + (completed.stderr or "")
         import re
         # Parse last blackdetect line: black_start:.. black_end:.. black_duration:..
@@ -350,7 +350,7 @@ def silence_fraction_in_segment(path: str, start_hms: str, duration_s: float) ->
             "ffmpeg", "-hide_banner", "-ss", start_hms, "-t", f"{max(0.5, duration_s):.2f}",
             "-i", path, "-af", "silencedetect=noise=-35dB:d=0.3", "-f", "null", "-"
         ]
-        completed = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=60)
+        completed = _run_ffmpeg_gated(cmd, timeout=60, encoding="utf-8")
         out = (completed.stdout or "") + "\n" + (completed.stderr or "")
         import re
         sil_starts = [float(x) for x in re.findall(r"silence_start:([0-9]+\.?[0-9]*)", out)]
@@ -2353,7 +2353,7 @@ async def auto_intro(req: URLIntroReq):
                     "ffmpeg", "-y", "-i", dl_path,
                     "-map", "0:s:0", "-c:s", "srt", srt_path
                 ]
-                subprocess.run(extract_cmd, capture_output=True, text=True, timeout=45)
+                _run_ffmpeg_gated(extract_cmd, timeout=45)
             except subprocess.TimeoutExpired:
                 logger.warning("Subtitle extraction timed out; skipping embedded subs")
             except Exception:
@@ -2579,13 +2579,14 @@ async def xiaohongshu_publish(request: XHSPublishReq):
     """发布内容到小红书"""
     try:
         publisher = get_xiaohongshu_publisher()
-        result = await publisher.publish_note(
+        result = await asyncio.to_thread(
+            publisher.publish_note,
             title=request.title,
             content=request.content,
             images=request.images,
             tags=request.tags,
             location=request.location,
-            privacy=request.privacy
+            privacy=request.privacy,
         )
         return result
     except Exception as e:
@@ -2603,9 +2604,9 @@ async def decorate_image(request: ImageDecorateReq):
     """装饰图片"""
     try:
         decorator = get_image_decorator()
-        result = await decorator.decorate_image(
-            image_path=request.image_path,
-            decorations=request.decorations
+        # Pillow work: keep it off the event loop.
+        result = await asyncio.to_thread(
+            decorator.decorate_image, image_path=request.image_path, decorations=request.decorations
         )
         return result
     except Exception as e:
@@ -2624,10 +2625,9 @@ async def generate_smart_decorations(req: SmartDecorationReq):
     """智能生成装饰配置"""
     try:
         decorator = get_image_decorator()
-        result = await decorator.generate_smart_decorations(
-            theme=req.theme,
-            content_type=req.content_type,
-            mood=req.mood
+        # Pillow work: keep it off the event loop.
+        result = await asyncio.to_thread(
+            decorator.generate_smart_decorations, theme=req.theme, content_type=req.content_type, mood=req.mood
         )
         return result
     except Exception as e:
@@ -2820,17 +2820,9 @@ async def generate_advanced_collage(request: AdvancedCollageReq):
     try:
         collage_generator = get_advanced_collage_generator()
         
-        result = await collage_generator.generate_advanced_collage(
-            images=request.images,
-            title=request.title,
-            layout_type=request.layout_type,
-            style=request.style,
-            color_scheme=request.color_scheme,
-            canvas_size=tuple(request.canvas_size),
-            add_effects=request.add_effects,
-            add_text_overlay=request.add_text_overlay,
-            extra_text=request.extra_text or "",
-            text_position=request.text_position
+        # Pillow work: keep it off the event loop.
+        result = await asyncio.to_thread(
+            collage_generator.generate_advanced_collage, images=request.images, title=request.title, layout_type=request.layout_type, style=request.style, color_scheme=request.color_scheme, canvas_size=tuple(request.canvas_size), add_effects=request.add_effects, add_text_overlay=request.add_text_overlay, extra_text=request.extra_text or '', text_position=request.text_position
         )
         
         logger.info(f"高级拼图生成成功: {request.title}")
@@ -2873,14 +2865,9 @@ async def generate_cover_image(request: SmartCoverReq):
     """生成智能封面"""
     try:
         generator = get_smart_cover_generator()
-        result = await generator.generate_cover(
-            images=request.images,
-            title=request.title,
-            subtitle=request.subtitle,
-            layout=request.layout,
-            theme=request.theme,
-            platform=request.platform,
-            custom_config=request.custom_config
+        # Pillow work: keep it off the event loop.
+        result = await asyncio.to_thread(
+            generator.generate_cover, images=request.images, title=request.title, subtitle=request.subtitle, layout=request.layout, theme=request.theme, platform=request.platform, custom_config=request.custom_config
         )
         return result
     except Exception as e:

@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Union
 import subprocess
+from core.concurrency import run_ffmpeg
 from core.runtime import MODEL_DIR, OUTPUT_DIR
 
 try:
@@ -163,7 +164,7 @@ class WhisperASRService:
                 audio_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = run_ffmpeg(cmd, timeout=300)
             
             if result.returncode != 0:
                 raise RuntimeError(f"音频提取失败: {result.stderr}")

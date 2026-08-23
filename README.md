@@ -141,8 +141,10 @@ curl -X POST http://127.0.0.1:8000/video/multi_segment_clipping \
 默认只接受运行时受管目录内的本地文件，并拒绝回环、内网、链路本地等远程地址，避免路径穿越和 SSRF。除非处于可信的单机环境，不要设置 `ALLOW_UNSAFE_LOCAL_PATHS=true`。
 
 并发方面，`MAX_CONCURRENT_MEDIA_JOBS` 限制同时运行的 FFmpeg 进程数（默认 CPU 核数的
-一半）。这是把主链路迁到 Celery 之前的过渡措施：超出上限的请求会排队等待，而不是把机器
-上的 FFmpeg 进程数推到几十个。
+一半）。**所有** FFmpeg 调用都经过这道闸门——主剪辑、黑屏/静音检测、封面抽帧、音频处理、
+字幕提取和 ASR 音频转换；`tests/test_concurrency.py` 会静态检查有没有漏网的
+`subprocess.run`。`ffprobe` 故意不限流：它只读几毫秒的元数据，排在长编码后面没有意义。
+超出上限的请求会排队等待，而不是把机器上的 FFmpeg 进程数推到几十个。
 
 生产环境建议至少设置：
 
@@ -222,7 +224,7 @@ media / jobs / tasks / admin` 分组。此前有 14 个路由在前端、测试�
 是通用拼图（dynamic/grid/magazine/mosaic/creative），`xiaohongshu_collage_generator` 是
 小红书专用的结构化版本。都不合并。
 
-## 结构## 结构
+## 结构
 
 ```text
 api/main.py                 FastAPI 路由与输入校验
@@ -250,6 +252,7 @@ tests/                      API 表面、安全边界、中文评分、任务流
 ## 测试与检查
 
 ```bash
+pip install -r requirements-dev.txt   # 运行时依赖 + 测试依赖
 pytest -q
 python -m compileall -q api core routers worker tests
 node --check frontend/script.js

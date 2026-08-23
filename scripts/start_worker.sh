@@ -28,7 +28,7 @@ echo "Starting Celery worker in background..."
 nohup celery -A worker.celery_app worker \
     --loglevel=info \
     --concurrency=2 \
-    --queues=default \
+    --queues=celery \
     --hostname=worker1@%h \
     > logs/celery_worker.out 2>&1 &
 

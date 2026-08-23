@@ -48,6 +48,5 @@ scipy>=1.10.0,<2.0.0
 librosa>=0.10.1,<1.0.0
 soundfile>=0.12.1,<1.0.0
 
-# --- tests ---
-pytest>=7.4.3,<9.0.0
-pytest-asyncio>=0.21.1,<2.0.0
+# Test-only dependencies live in requirements-dev.txt so the runtime
+# images do not ship pytest.

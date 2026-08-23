@@ -497,11 +497,11 @@ function initializeLLMFeatures() {
         window.generateSmartContent = generateSmartContentLLM;
     }
     
-    // 替换原有的拼图生成函数
-    if (typeof generateSmartCover !== 'undefined') {
-        window.originalGenerateSmartCover = generateSmartCover;
-        window.generateSmartCover = generateAdvancedCollage;
-    }
+    // 封面按钮不再被替换成拼图生成。这个替换原本是 generateSmartCover 传假路径
+    // （temp_image_0.jpg）必然失败时的绕行方案；那个问题已经修好，而按钮写的是
+    // "智能封面"，旁边就是"下载封面"，它应该真的去生成封面。
+    // generateAdvancedCollage 仍然导出，供需要 /collage/generate_advanced 的调用方使用。
+    window.generateAdvancedCollage = generateAdvancedCollage;
     
     console.log('🤖 LLM功能已初始化');
 }

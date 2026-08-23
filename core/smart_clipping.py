@@ -411,7 +411,7 @@ class SmartClippingEngine:
                 "-vf", "crop=in_w*0.9:in_h*0.9:(in_w-out_w)/2:(in_h-out_h)/2,blackdetect=d=0.3:pic_th=0.98",
                 "-an", "-f", "null", "-"
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = run_ffmpeg(cmd, timeout=60)
             stderr_output = result.stderr or ""
             
             matches = re.findall(r"black_duration:([0-9]+\.?[0-9]*)", stderr_output)
@@ -429,7 +429,7 @@ class SmartClippingEngine:
                 "ffmpeg", "-hide_banner", "-ss", start_hms, "-t", f"{duration:.2f}",
                 "-i", video_path, "-af", "silencedetect=noise=-35dB:d=0.3", "-f", "null", "-"
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = run_ffmpeg(cmd, timeout=60)
             stderr_output = result.stderr or ""
             
             matches = re.findall(r"silence_duration: ([0-9]+\.?[0-9]*)", stderr_output)

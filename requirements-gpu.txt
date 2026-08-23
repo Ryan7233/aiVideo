@@ -9,4 +9,5 @@
 #        "CLIP模型不可用，将使用传统方法" and uses the heuristic ranker.
 torch>=2.2.0
 torchaudio>=2.2.0
-clip @ git+https://github.com/openai/CLIP.git
+# Pinned to a commit: an unpinned git URL makes the build non-reproducible.
+clip @ git+https://github.com/openai/CLIP.git@dcba3cb2e2827b402d2701e7e1c7d9fed8a20ef1

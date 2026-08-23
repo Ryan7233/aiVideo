@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 from datetime import datetime
 
+from core.concurrency import run_ffmpeg
 from core.color_palette import (
     adjust_for_text,
     complement,
@@ -249,7 +250,7 @@ class SmartCoverDesigner:
                 "-q:v", "2", str(frame_path)
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = run_ffmpeg(cmd, timeout=120)
             
             if result.returncode == 0 and frame_path.exists():
                 return str(frame_path)
