@@ -62,10 +62,10 @@ def resize(image: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
 
     array = np.asarray(image)
     if array.ndim == 3:
-        pil = Image.fromarray(array[:, :, ::-1].astype(np.uint8), mode="RGB")
+        pil = Image.fromarray(np.ascontiguousarray(array[:, :, ::-1], dtype=np.uint8))
         resized = pil.resize(size, Image.BILINEAR)
         return np.asarray(resized, dtype=np.uint8)[:, :, ::-1].copy()
-    pil = Image.fromarray(array.astype(np.uint8), mode="L")
+    pil = Image.fromarray(array.astype(np.uint8))
     return np.asarray(pil.resize(size, Image.BILINEAR), dtype=np.uint8)
 
 

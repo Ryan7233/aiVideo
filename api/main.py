@@ -2928,15 +2928,9 @@ async def generate_xiaohongshu_collage(request: XiaohongshuCollageReq):
                 )
                 custom_texts.append(text_config)
         
-        result = await xiaohongshu_generator.generate_xiaohongshu_collage(
-            images=request.images,
-            title=request.title,
-            subtitle=request.subtitle,
-            layout=request.layout,
-            color_scheme=request.color_scheme,
-            custom_texts=custom_texts,
-            config=config,
-            overlay_texts=request.overlay_texts
+        # Pillow work: keep it off the event loop.
+        result = await asyncio.to_thread(
+            xiaohongshu_generator.generate_xiaohongshu_collage, images=request.images, title=request.title, subtitle=request.subtitle, layout=request.layout, color_scheme=request.color_scheme, custom_texts=custom_texts, config=config, overlay_texts=request.overlay_texts
         )
         
         logger.info(f"小红书拼图生成成功: {request.title}")
@@ -3032,15 +3026,9 @@ async def render_xhs_page(request: PageRenderReq):
             out_path, b64 = await xh._save_high_quality_image(canvas, cfg)
             return {"success": True, "image_path": str(out_path), "base64_data": b64, "mode": request.mode}
         else:
-            res = await xh.generate_xiaohongshu_collage(
-                images=request.images,
-                title=request.title,
-                subtitle=request.subtitle,
-                layout=request.layout,
-                color_scheme='xiaohongshu_pink',
-                custom_texts=[],
-                config=cfg,
-                overlay_texts=request.overlay_texts
+            # Pillow work: keep it off the event loop.
+            res = await asyncio.to_thread(
+                xh.generate_xiaohongshu_collage, images=request.images, title=request.title, subtitle=request.subtitle, layout=request.layout, color_scheme='xiaohongshu_pink', custom_texts=[], config=cfg, overlay_texts=request.overlay_texts
             )
             return res
     except Exception as e:

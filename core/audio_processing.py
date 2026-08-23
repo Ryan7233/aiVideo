@@ -207,6 +207,10 @@ class AudioProcessingService:
             
             # 节拍检测
             tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
+            # librosa 0.11 returns tempo as an array where 0.10 returned a
+            # scalar; float() on the array raises and takes the whole feature
+            # analysis into its except block.
+            tempo = float(np.atleast_1d(tempo)[0]) if np.size(tempo) else 0.0
             
             
             # 语音活动检测
@@ -229,7 +233,7 @@ class AudioProcessingService:
                     'centroid_mean': float(np.mean(spectral_centroids)),
                     'rolloff_mean': float(np.mean(spectral_rolloff))
                 },
-                'tempo': float(tempo),
+                'tempo': tempo,
                 'beats_count': len(beats),
                 'speech_segments': speech_segments,
                 'noise_level': noise_level,
@@ -237,8 +241,15 @@ class AudioProcessingService:
             }
             
         except Exception as e:
-            logger.error(f"音频特征分析失败: {e}")
-            return self._basic_audio_analysis(audio_path)
+            # Mark the result rather than quietly returning the ffprobe-only
+            # dict: this path used to report success while every spectral and
+            # tempo feature was missing, and nothing downstream could tell.
+            logger.error(f"音频特征分析失败，降级为基础分析: {e}")
+            basic = self._basic_audio_analysis(audio_path)
+            if isinstance(basic, dict):
+                basic["degraded"] = True
+                basic["degraded_reason"] = f"{type(e).__name__}: {e}"
+            return basic
     
     def _basic_audio_analysis(self, audio_path: str) -> Dict:
         """基础音频分析（不依赖librosa）"""

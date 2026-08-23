@@ -164,7 +164,7 @@ class XiaohongshuCollageGenerator:
                 pass
         return load_font(size, prefer_cjk=font_type != "english")
     
-    async def generate_xiaohongshu_collage(
+    def generate_xiaohongshu_collage(
         self,
         images: List[str],
         title: str,
@@ -207,7 +207,7 @@ class XiaohongshuCollageGenerator:
             
             # 应用布局
             layout_func = self.layout_templates.get(layout, self._magazine_layout)
-            canvas = await layout_func(canvas, loaded_images, colors, config)
+            canvas = layout_func(canvas, loaded_images, colors, config)
             
             # 添加主标题和副标题（支持居中覆盖）
             # 记录可选的覆盖字体路径
