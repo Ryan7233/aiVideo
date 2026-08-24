@@ -1,13 +1,7 @@
-# Optional extras. Neither is needed for the main pipeline.
+# Optional. Not needed for the clipping pipeline.
 #
 #   pip install -r requirements-gpu.txt
 #
-# torch: only enables CUDA auto-detection to fall back on. CTranslate2 already
-# handles this, so install it only if you have a specific reason.
-# clip:  enables the CLIP-based photo ranking path in
-#        core/advanced_photo_ranking.py, which otherwise logs
-#        "CLIP模型不可用，将使用传统方法" and uses the heuristic ranker.
+# torch only enables a CUDA fallback check; CTranslate2 already detects a GPU,
+# so install this solely if you have a specific reason.
 torch>=2.2.0
-torchaudio>=2.2.0
-# Pinned to a commit: an unpinned git URL makes the build non-reproducible.
-clip @ git+https://github.com/openai/CLIP.git@dcba3cb2e2827b402d2701e7e1c7d9fed8a20ef1

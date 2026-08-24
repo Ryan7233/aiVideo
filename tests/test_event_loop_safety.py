@@ -129,15 +129,3 @@ def test_no_await_on_a_synchronous_function():
     assert not offenders, offenders
 
 
-def test_pipeline_bodies_stay_synchronous(coroutine_routes):
-    """The extracted helpers must remain plain functions a thread can run."""
-    tree = ast.parse(API_MAIN.read_text(encoding="utf-8"))
-    helpers = {
-        node.name
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name.startswith("_run_xiaohongshu")
-    }
-    assert helpers == {"_run_xiaohongshu_pipeline", "_run_xiaohongshu_pipeline_pro"}
-
-    names = {route.name for route in coroutine_routes}
-    assert {"xiaohongshu_pipeline", "xiaohongshu_pipeline_pro"} <= names

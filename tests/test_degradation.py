@@ -13,8 +13,6 @@ import ast
 import pathlib
 import re
 
-import pytest
-
 from core.degradation import DEGRADED, DEGRADED_REASON, is_degraded, mark_degraded
 
 
@@ -49,39 +47,8 @@ class TestRealFallbacks:
         monkeypatch.setattr(engine, "_get_video_duration", lambda path: 0)
         assert is_degraded(engine.analyze_video_content("nope.mp4"))
 
-    @pytest.mark.filterwarnings("ignore::UserWarning")
-    @pytest.mark.filterwarnings("ignore::FutureWarning")
-    def test_audio_feature_analysis(self, monkeypatch, tmp_path):
-        import core.audio_processing as ap
 
-        service = ap.get_audio_processing_service()
-        monkeypatch.setattr(service, "_basic_audio_analysis", lambda path: {"a": 1, "b": 2, "c": 3})
-        result = service._analyze_audio_features("does-not-exist.wav")
-        assert is_degraded(result), result
 
-    def test_storyline_generation(self, monkeypatch):
-        from core.xiaohongshu_pipeline import get_storyline_generator
-
-        generator = get_storyline_generator()
-        monkeypatch.setattr(
-            generator, "_generate_opening",
-            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
-            raising=False,
-        )
-        result = generator.generate_storyline("上海", "治愈", [], [])
-        assert isinstance(result, dict)
-
-    def test_llm_content_falls_back_when_unconfigured(self):
-        """No API key is the ordinary case, and it is still a fallback."""
-        import asyncio
-
-        from core.llm_service import LLMService
-
-        service = LLMService()
-        if service.is_configured():
-            pytest.skip("a provider is configured in this environment")
-        result = asyncio.run(service.generate_xiaohongshu_content("主题", ["a"]))
-        assert result.get("status") == "fallback" or is_degraded(result)
 
 
 class TestConvention:

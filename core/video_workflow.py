@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from core.concurrency import run_ffmpeg
+from core.edl import to_edl, to_markdown, to_srt
 from core.runtime import OUTPUT_DIR, resolve_media_path
 from core.semantic_scoring import get_semantic_scorer
 from core.smart_clipping import SmartClippingEngine
@@ -351,6 +352,30 @@ def _combine_segments(video_path: Path, segments: Sequence[Dict[str, Any]], outp
             path.unlink(missing_ok=True)
 
 
+def _write_decision_list(
+    stem: str,
+    segments: Sequence[Dict[str, Any]],
+    source: str,
+    topic: str,
+) -> Dict[str, str]:
+    """Write the selection as Markdown, EDL and SRT, and report the paths."""
+    written: Dict[str, str] = {}
+    for suffix, body in (
+        ("md", to_markdown(segments, source=source, topic=topic)),
+        ("edl", to_edl(segments, title=Path(source).stem or "aiVideo")),
+        ("srt", to_srt(segments)),
+    ):
+        if not body.strip():
+            continue
+        path = OUTPUT_DIR / f"clips_{stem}.{suffix}"
+        try:
+            path.write_text(body, encoding="utf-8")
+            written[suffix] = f"output_data/{path.name}"
+        except OSError as exc:
+            logger.warning("写出 %s 清单失败: %s", suffix, exc)
+    return written
+
+
 def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
     """Run the complete measured/semantic multi-segment workflow."""
     video_path = resolve_media_path(options["video_path"])
@@ -397,8 +422,11 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
     if not selected:
         raise ValueError("未找到可用片段")
 
-    output_path = OUTPUT_DIR / f"multi_clip_{uuid.uuid4().hex}.mp4"
-    _combine_segments(video_path, selected, output_path)
+    render = bool(options.get("render", True))
+    stem = uuid.uuid4().hex
+    output_path = OUTPUT_DIR / f"multi_clip_{stem}.mp4"
+    if render:
+        _combine_segments(video_path, selected, output_path)
 
     for segment in selected:
         segment["preview_text"] = segment.pop("text", "")[:300]
@@ -407,9 +435,16 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
         segment["visual_score"] = round(segment["visual_score"], 4)
         segment["audio_score"] = round(segment["audio_score"], 4)
 
+    # The decision list is an output in its own right, not a by-product: the
+    # judgement about which moments matter is the part a dedicated editor
+    # cannot do for you, and it is useful even when nothing is rendered.
+    decisions = _write_decision_list(stem, selected, str(video_path), options.get("topic", ""))
+
     return {
         "status": "success",
-        "output_video": f"output_data/{output_path.name}",
+        "output_video": f"output_data/{output_path.name}" if render else None,
+        "rendered": render,
+        "decision_list": decisions,
         "selected_segments": selected,
         "analysis": {
             "total_video_duration": round(video_duration, 3),

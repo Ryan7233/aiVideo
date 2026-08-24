@@ -17,10 +17,26 @@ from api.main import app
 #     open third-party API, so these could never become real.
 #   /xiaohongshu/edit_text returned "文案编辑成功" without editing anything.
 REMOVED = {
-    "/xiaohongshu/authorize",
-    "/xiaohongshu/profile",
-    "/xiaohongshu/note/{note_id}/stats",
-    "/xiaohongshu/edit_text",
+    # The Xiaohongshu note half of the product: collages, covers, photo
+    # ranking, copywriting, publishing. It competed with a dedicated editor
+    # and could never close its loop -- there is no open publishing API.
+    "/xiaohongshu/authorize", "/xiaohongshu/profile", "/xiaohongshu/edit_text",
+    "/xiaohongshu/note/{note_id}/stats", "/xiaohongshu/pipeline",
+    "/xiaohongshu/pipeline_pro", "/xiaohongshu/publish", "/xiaohongshu/draft",
+    "/xiaohongshu/storyline", "/xiaohongshu/subtitles", "/xiaohongshu/cover",
+    "/xiaohongshu/export", "/xiaohongshu/photo_rank", "/xiaohongshu/layouts",
+    "/xiaohongshu/generate_collage", "/xiaohongshu/render_page",
+    "/cover/generate", "/cover/templates",
+    "/collage/generate_advanced", "/collage/layouts",
+    "/image/decorate", "/image/decorations/smart",
+    "/llm/generate_content", "/llm/generate_pro_content", "/llm/status",
+    "/pro/audio_processing", "/pro/personalized_writing", "/pro/photo_rank_advanced",
+    "/pro/semantic_highlights", "/pro/smart_cover", "/pro/user_style_learning",
+    # simulation-only demos, and two more clipping implementations
+    "/segment", "/captions", "/upload", "/upload/photos",
+    "/smart_clipping/asr_enhanced", "/auto_intro",
+    # the parallel task system core.jobs replaced
+    "/tasks/enqueue", "/tasks/status/{task_id}", "/tasks/cancel/{task_id}",
 }
 
 # Real capabilities that simply had no in-repo caller. Kept and documented.
@@ -28,13 +44,8 @@ UNCALLED_BUT_REAL = {
     "/asr/info",
     "/asr/transcribe",
     "/asr/extract_audio",
-    "/auto_intro",
     "/burnsub",
-    "/collage/layouts",
-    "/cover/templates",
-    "/xiaohongshu/layouts",
-    "/image/decorate",
-    "/image/decorations/smart",
+    "/cut916",
 }
 
 # Everything the built-in UI or the documented workflow depends on.
@@ -46,13 +57,7 @@ LOAD_BEARING = {
     "/jobs/{job_id}",
     "/jobs/kinds",
     "/upload/video",
-    "/upload/photos",
     "/video/multi_segment_clipping",
-    "/xiaohongshu/pipeline",
-    "/xiaohongshu/pipeline_pro",
-    "/xiaohongshu/generate_collage",
-    "/collage/generate_advanced",
-    "/cover/generate",
     "/analyze_video",
     "/semantic/analyze",
 }
@@ -114,7 +119,7 @@ def test_every_route_is_tagged(schema, paths):
 
 def test_surface_has_not_grown(paths):
     """A ratchet: the route count may shrink, never grow, without a decision."""
-    assert len(paths) <= 56, (
+    assert len(paths) <= 20, (
         f"the API grew to {len(paths)} paths. If the addition is intended, "
         "raise this bound deliberately."
     )

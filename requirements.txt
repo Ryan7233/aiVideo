@@ -1,7 +1,5 @@
-# Pins are ranges, not exact versions: the previous exact pins (numpy 1.24.3,
-# scikit-learn 1.3.0, Pillow 10.0.0, opencv 4.8.1.78) have no wheels for
-# Python 3.13 and fail to build from source, so `pip install -r` could not
-# satisfy the README's "Python 3.11+".
+# Ranges rather than exact pins so `pip install -r` works on Python 3.11-3.13;
+# requirements.lock.txt records the versions this was verified against.
 
 # --- web ---
 fastapi>=0.104.1,<1.0.0
@@ -18,37 +16,21 @@ python-dotenv>=1.0.0,<2.0.0
 loguru>=0.7.2,<1.0.0
 psutil>=5.9.6,<8.0.0
 
-# --- queue ---
+# --- queue (optional: only needed for JOB_BACKEND=celery) ---
 celery>=5.3.4,<6.0.0
 redis>=5.0.1,<7.0.0
 flower>=2.0.1,<3.0.0
 
 # --- media ingest ---
-# The upper bound was <2026.0.0, which pinned yt-dlp to releases predating the
-# platform changes it exists to keep up with.
+# Platform links (Bilibili, YouTube, ...) are resolved with yt-dlp; a direct
+# file URL goes through the size-capped downloader instead.
 yt-dlp>=2024.12.6,<2027.0.0
 
 # --- speech & text ---
-# faster-whisper runs on CTranslate2, not torch. torch/torchaudio were listed
-# as hard dependencies (~3 GB) but nothing imports them unconditionally: the
-# only uses were a CUDA check (now done via CTranslate2) and a CLIP path whose
-# `clip` package was never in this file, so it could never activate.
-# For GPU inference or the CLIP ranking path see requirements-gpu.txt.
+# faster-whisper runs on CTranslate2, not torch. Word timestamps drive the
+# utterance re-segmentation in core/utterances.py.
 faster-whisper>=1.0.1,<2.0.0
 jieba>=0.42.1,<1.0.0
 
-# --- imaging & analysis ---
-# No OpenCV. It bundles its own FFmpeg shared libraries, and faster-whisper
-# pulls in PyAV, which bundles a different major version; loading both put two
-# copies of libavdevice in one process and macOS warned about duplicate
-# Objective-C classes and "mysterious crashes". The ten calls that needed it
-# now live in core/imaging.py on numpy/Pillow/SciPy, which were already here.
-Pillow>=10.0.0,<12.0.0
-numpy>=1.24.3,<3.0.0
-scikit-learn>=1.3.0,<2.0.0
-scipy>=1.10.0,<2.0.0
-librosa>=0.10.1,<1.0.0
-soundfile>=0.12.1,<1.0.0
-
-# Test-only dependencies live in requirements-dev.txt so the runtime
-# images do not ship pytest.
+# Pillow, numpy, scikit-learn, librosa, soundfile and scipy went with the
+# cover, collage and photo-ranking features. Nothing left imports them.

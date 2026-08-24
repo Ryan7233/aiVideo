@@ -15,7 +15,7 @@ def test_root_serves_frontend():
     response = client.get("/")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
-    assert "AI Video" in response.text
+    assert "aiVideo" in response.text
 
 
 def test_info_endpoint():
@@ -33,16 +33,6 @@ def test_health_check():
     assert "timestamp" in data
 
 
-def test_segment_validation_and_simulation_label():
-    invalid = client.post("/segment", json={"transcript": "", "min_sec": 25, "max_sec": 60})
-    assert invalid.status_code == 422
-
-    response = client.post(
-        "/segment",
-        json={"transcript": "00:10 测试字幕内容", "min_sec": 25, "max_sec": 60},
-    )
-    assert response.status_code == 200
-    assert response.json()["mode"] == "simulation"
 
 
 def test_semantic_analysis():
@@ -74,16 +64,6 @@ def test_cut916_restricts_source_and_output():
         (OUTPUT_DIR / "test_cut_output.mp4").unlink(missing_ok=True)
 
 
-def test_upload_metadata_endpoint_is_explicitly_simulated():
-    source = INPUT_DIR / "test_upload_source.mp4"
-    source.write_bytes(b"placeholder")
-    try:
-        response = client.post("/upload", json={"path": str(source), "bucket": "test"})
-        assert response.status_code == 200
-        assert response.json()["status"] == "simulation"
-        assert response.json()["uploaded"] is False
-    finally:
-        source.unlink(missing_ok=True)
 
 
 def test_optional_api_key(monkeypatch):
@@ -99,26 +79,6 @@ def test_optional_api_key(monkeypatch):
     assert client.get("/output/not-present.mp4").status_code == 401
 
 
-def test_xiaohongshu_publish_is_explicitly_simulated():
-    image = OUTPUT_DIR / "test_publish_image.jpg"
-    image.write_bytes(b"placeholder")
-    try:
-        response = client.post(
-            "/xiaohongshu/publish",
-            json={
-                "title": "测试",
-                "content": "测试内容",
-                "images": [str(image)],
-                "tags": ["测试"],
-            },
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "simulation"
-        assert data["published"] is False
-        assert data["data"]["note_id"] is None
-    finally:
-        image.unlink(missing_ok=True)
 
 
 def test_multi_segment_duration_budget_validation():

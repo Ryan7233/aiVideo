@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from core.concurrency import run_ffmpeg
 from core.runtime import MODEL_DIR, OUTPUT_DIR
+from core.utterances import resegment
 
 try:
     from faster_whisper import WhisperModel
@@ -277,7 +278,7 @@ class WhisperASRService:
                 "suppress_tokens": [-1],
                 "without_timestamps": False,
                 "max_initial_timestamp": 1.0,
-                "word_timestamps": False,
+                "word_timestamps": True,
                 "prepend_punctuations": "\"'([{-",
                 "append_punctuations": "\"'.。,，!！?？:：\")]}、",
                 "vad_filter": True,
@@ -345,16 +346,28 @@ class WhisperASRService:
                 'temperature': segment.temperature,
                 'avg_logprob': segment.avg_logprob,
                 'compression_ratio': segment.compression_ratio,
-                'no_speech_prob': segment.no_speech_prob
+                'no_speech_prob': segment.no_speech_prob,
+                'words': [
+                    {'word': word.word, 'start': word.start, 'end': word.end}
+                    for word in (getattr(segment, 'words', None) or [])
+                ],
             }
-            
+
             result['segments'].append(segment_data)
             full_text_parts.append(segment.text.strip())
-        
+
         result['full_text'] = ' '.join(full_text_parts)
+
+        # Whisper's segment boundaries follow its decoding windows, not
+        # speech: continuous narration comes back as one segment covering the
+        # whole clip, which leaves every candidate window in the clipper
+        # looking at identical text. Rebuild them from the word timings.
+        result['raw_segment_count'] = len(result['segments'])
+        result['segments'] = resegment(result['segments'])
+
         result['word_count'] = len(result['full_text'].split())
         result['segment_count'] = len(result['segments'])
-        
+
         return result
     
     def transcribe_video(self, video_path: str, language: str = None, 

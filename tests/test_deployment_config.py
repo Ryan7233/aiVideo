@@ -63,9 +63,10 @@ class TestImages:
         )
 
     @pytest.mark.parametrize("name", DOCKERFILES)
-    def test_images_install_a_cjk_font(self, name):
+    def test_images_install_ffmpeg(self, name):
+        """The whole pipeline is FFmpeg; without it the image is inert."""
         text = (ROOT / name).read_text(encoding="utf-8")
-        assert "fonts-noto-cjk" in text, f"{name}: cover titles would render as tofu"
+        assert "ffmpeg" in text, f"{name} does not install FFmpeg"
 
 
 class TestNginx:

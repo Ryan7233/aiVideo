@@ -43,8 +43,7 @@ def _wait_for(job_id, client, timeout=90):
 class TestJobApi:
     def test_kinds_are_advertised(self, client):
         payload = client.get("/jobs/kinds").json()
-        assert "multi_segment_clipping" in payload["kinds"]
-        assert "xiaohongshu_pipeline" in payload["kinds"]
+        assert payload["kinds"] == ["multi_segment_clipping"]
         assert payload["backend"] == "thread"
 
     def test_unknown_kind_is_rejected_without_creating_a_record(self, client):
@@ -174,74 +173,6 @@ def test_clipping_job_runs_to_completion(client):
             output.unlink(missing_ok=True)
 
 
-class TestPipelineJobHandlers:
-    """The XHS pipelines as background jobs.
-
-    The pipeline body itself is unchanged; what is new is the job wiring around
-    it -- param validation, source resolution and progress reporting -- so that
-    is what these cover, with the (minutes-long, model-downloading) body stubbed.
-    """
-
-    def test_handler_validates_params_and_resolves_the_source(self, monkeypatch, client):
-        from api import main
-
-        source = INPUT_DIR / "pipeline_job.mp4"
-        source.write_bytes(b"placeholder")
-        seen = {}
-
-        def fake_body(req, input_path, ts):
-            seen["input_path"] = input_path
-            seen["city"] = req.city
-            return {"status": "success", "pipeline_result": {"processing_id": f"xhs_{ts}"}}
-
-        monkeypatch.setattr(main, "_run_xiaohongshu_pipeline", fake_body)
-        try:
-            job_id = client.post("/jobs", json={
-                "kind": "xiaohongshu_pipeline",
-                "params": {"video_url": str(source), "city": "上海", "style": "轻松"},
-            }).json()["job_id"]
-
-            payload = _wait_for(job_id, client, timeout=30)
-            assert payload["status"] == job_store.SUCCEEDED, payload.get("error")
-            assert seen["input_path"] == str(source.resolve())
-            assert seen["city"] == "上海"
-            assert payload["result"]["status"] == "success"
-        finally:
-            source.unlink(missing_ok=True)
-
-    def test_bad_params_fail_the_job_instead_of_crashing_the_worker(self, client):
-        job_id = client.post("/jobs", json={
-            "kind": "xiaohongshu_pipeline",
-            "params": {"city": "上海"},  # video_url missing
-        }).json()["job_id"]
-
-        payload = _wait_for(job_id, client, timeout=30)
-        assert payload["status"] == job_store.FAILED
-        assert "video_url" in payload["error"]
-
-    def test_progress_is_reported_while_running(self, monkeypatch, client):
-        from api import main
-
-        source = INPUT_DIR / "pipeline_progress.mp4"
-        source.write_bytes(b"placeholder")
-        observed = []
-
-        def fake_body(req, input_path, ts):
-            observed.append(job_store.get_job(job_id_holder["id"])["progress"])
-            return {"status": "success"}
-
-        monkeypatch.setattr(main, "_run_xiaohongshu_pipeline", fake_body)
-        job_id_holder = {}
-        try:
-            job_id_holder["id"] = client.post("/jobs", json={
-                "kind": "xiaohongshu_pipeline",
-                "params": {"video_url": str(source)},
-            }).json()["job_id"]
-
-            _wait_for(job_id_holder["id"], client, timeout=30)
-            assert observed == [{"step": "processing"}]
-        finally:
-            source.unlink(missing_ok=True)
 
 
 class TestStatusTransitions:

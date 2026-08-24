@@ -146,9 +146,14 @@ def test_output_is_simplified_not_traditional(transcript):
 
 
 def test_segmentation_is_not_collapsed(transcript):
-    """The initial_prompt fix regressed this once; it must stay guarded."""
+    """One segment covering the clip makes every scoring window identical.
+
+    Boundaries now come from word timestamps rather than Whisper's decoding
+    windows, so the exact count varies with the speech; what must hold is that
+    the transcript is split at all and no piece swallows the whole clip.
+    """
     segments = transcript["segments"]
-    assert len(segments) >= 4, f"only {len(segments)} segments; the prompt is too long"
+    assert len(segments) >= 2, f"only {len(segments)} segment(s); segmentation collapsed"
     longest = max(segment["end"] - segment["start"] for segment in segments)
     assert longest <= 15, f"longest segment is {longest:.1f}s; segmentation collapsed"
 
