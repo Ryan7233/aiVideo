@@ -33,9 +33,8 @@ jobs:
         run: pytest -q
       - name: Static checks
         run: |
-          python -m compileall -q api core routers worker tests
+          python -m compileall -q api core worker tests
           # Blocking: undefined names, unused imports, dead locals.
-          python -m pyflakes api core routers worker tests scripts *.py
-          node --check frontend/script.js
-          node --check frontend/llm-integration.js
+          python -m pyflakes api core worker tests scripts *.py
+          node --check frontend/app.js
           for file in scripts/*.sh; do bash -n "$file"; done

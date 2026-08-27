@@ -122,3 +122,25 @@ def test_the_pipeline_writes_a_list_without_rendering(tmp_path):
         source.unlink(missing_ok=True)
         for path in written:
             path.unlink(missing_ok=True)
+
+
+class TestRenderIsOptIn:
+    """Omitting `render` must give the cheap answer, not a surprise transcode."""
+
+    def test_the_request_model_defaults_to_no_render(self):
+        from api.main import MultiSegmentClippingReq
+
+        from core.runtime import INPUT_DIR
+
+        probe = INPUT_DIR / "render_default_probe.mp4"
+        probe.write_bytes(b"placeholder")
+        try:
+            assert MultiSegmentClippingReq(video_path=str(probe), topic="t").render is False
+        finally:
+            probe.unlink(missing_ok=True)
+
+    def test_the_openapi_schema_agrees(self):
+        from api.main import app
+
+        schema = app.openapi()["components"]["schemas"]["MultiSegmentClippingReq"]
+        assert schema["properties"]["render"]["default"] is False

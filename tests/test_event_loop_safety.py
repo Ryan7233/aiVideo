@@ -57,6 +57,26 @@ def test_no_blocking_media_work_inside_coroutines(coroutine_routes):
     )
 
 
+def test_no_bare_subprocess_in_a_coroutine(coroutine_routes):
+    """subprocess.run blocks the loop whatever it is running.
+
+    The named-function list missed an ffprobe call that went straight to
+    subprocess.run inside an async route, with no timeout either.
+    """
+    offenders = []
+    for route in coroutine_routes:
+        for node in ast.walk(route):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if (isinstance(func, ast.Attribute) and func.attr == "run"
+                    and isinstance(func.value, ast.Name) and func.value.id == "subprocess"):
+                offenders.append(f"{route.name}:{node.lineno}")
+    assert not offenders, (
+        f"subprocess.run called directly from a coroutine: {offenders}"
+    )
+
+
 def test_no_fake_async_media_helpers(coroutine_routes):
     """`async def` with no await inside runs entirely on the caller's loop.
 

@@ -81,6 +81,8 @@ def test_synthetic_video_end_to_end():
                 "include_highlights": True,
                 "include_conclusion": True,
                 "enable_content_analysis": False,
+                # Rendering is opt-in now; this test is about the rendered file.
+                "render": True,
             }
         )
         output = OUTPUT_DIR / Path(result["output_video"]).name

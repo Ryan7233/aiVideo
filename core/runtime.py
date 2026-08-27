@@ -197,36 +197,80 @@ def download_public_file(url: str, destination: Path, max_bytes: int) -> Path:
 # Platforms serve video behind manifests and signed URLs, so a plain HTTP GET
 # cannot fetch them. yt-dlp resolves that. The URL is validated first, exactly
 # as a direct download would be; yt-dlp follows its own redirects from there.
-def download_with_ytdlp(url: str, prefix: str) -> Path:
-    """Fetch a platform video (YouTube, Bilibili, ...) into the download dir."""
+class DownloadTooLarge(ValueError):
+    """Raised when a download passes the size cap."""
+
+
+def _cleanup(stem: str) -> None:
+    """Remove whatever yt-dlp left behind, including .part and merge temps."""
+    for leftover in DOWNLOAD_DIR.glob(f"{stem}*"):
+        try:
+            leftover.unlink()
+        except OSError:
+            pass
+
+
+def download_with_ytdlp(url: str, prefix: str, max_bytes: int) -> Path:
+    """Fetch a platform video (YouTube, Bilibili, ...) into the download dir.
+
+    yt-dlp does its own connection handling, so neither the size cap nor the
+    per-hop peer check that guards the direct downloader applies to it. The
+    cap is reinstated here with a progress hook that aborts mid-download --
+    checking afterwards would mean the disk is already full.
+    """
     validated = validate_remote_url(url)
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
     stem = f"{prefix}_{uuid.uuid4().hex}"
-    template = str(DOWNLOAD_DIR / f"{stem}.%(ext)s")
+
+    def guard(status: dict) -> None:
+        seen = status.get("downloaded_bytes") or 0
+        declared = status.get("total_bytes") or status.get("total_bytes_estimate") or 0
+        if seen > max_bytes or declared > max_bytes:
+            raise DownloadTooLarge(
+                f"远程视频超过大小限制（{max_bytes // 1048576} MB）"
+            )
 
     options = {
         "format": "bv*+ba/b",
         "merge_output_format": "mp4",
-        "outtmpl": template,
+        "outtmpl": str(DOWNLOAD_DIR / f"{stem}.%(ext)s"),
         "quiet": True,
         "noprogress": True,
         "noplaylist": True,
+        "progress_hooks": [guard],
+        "max_filesize": max_bytes,
     }
     try:
         import yt_dlp
     except ImportError as exc:
         raise ValueError("未安装 yt-dlp，无法解析平台链接") from exc
 
-    with yt_dlp.YoutubeDL(options) as downloader:
-        info = downloader.extract_info(validated, download=True)
+    try:
+        with yt_dlp.YoutubeDL(options) as downloader:
+            info = downloader.extract_info(validated, download=True)
+    except DownloadTooLarge:
+        _cleanup(stem)
+        raise
+    except Exception as exc:
+        _cleanup(stem)
+        raise ValueError(f"平台链接下载失败: {exc}") from exc
 
     requested = (info or {}).get("requested_downloads") or []
-    if requested and requested[0].get("filepath"):
-        return Path(requested[0]["filepath"])
-    for candidate in sorted(DOWNLOAD_DIR.glob(f"{stem}.*")):
-        if candidate.is_file():
-            return candidate
-    raise ValueError("yt-dlp 没有产出可用的视频文件")
+    candidate = Path(requested[0]["filepath"]) if requested and requested[0].get("filepath") else None
+    if candidate is None:
+        for found in sorted(DOWNLOAD_DIR.glob(f"{stem}.*")):
+            if found.is_file() and found.suffix != ".part":
+                candidate = found
+                break
+    if candidate is None or not candidate.is_file():
+        _cleanup(stem)
+        raise ValueError("yt-dlp 没有产出可用的视频文件")
+
+    # max_filesize is advisory for some extractors; enforce it on the result.
+    if candidate.stat().st_size > max_bytes:
+        _cleanup(stem)
+        raise DownloadTooLarge(f"远程视频超过大小限制（{max_bytes // 1048576} MB）")
+    return candidate
 
 
 def is_direct_media_url(url: str) -> bool:
@@ -254,7 +298,7 @@ def materialize_video_source(url: str, prefix: str, max_bytes: int) -> Path:
         destination = DOWNLOAD_DIR / f"{prefix}_{uuid.uuid4().hex}.mp4"
         download_public_file(validated_url, destination, max_bytes)
         return destination
-    return download_with_ytdlp(url, prefix)
+    return download_with_ytdlp(url, prefix, max_bytes)
 
 
 ensure_runtime_directories()

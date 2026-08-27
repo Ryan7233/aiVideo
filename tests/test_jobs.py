@@ -158,6 +158,7 @@ def test_clipping_job_runs_to_completion(client):
                 "target_segments": 2,
                 "total_duration": 16,
                 "enable_content_analysis": False,
+                "render": True,
             },
         }).json()["job_id"]
 

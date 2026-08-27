@@ -13,17 +13,39 @@ import re
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from core.concurrency import run_ffmpeg
 from core.edl import to_edl, to_markdown, to_srt
-from core.runtime import OUTPUT_DIR, resolve_media_path
+from core.config import MAX_FILE_SIZE
+from core.runtime import (
+    OUTPUT_DIR,
+    materialize_video_source,
+    resolve_media_path,
+)
 from core.semantic_scoring import get_semantic_scorer
 from core.smart_clipping import SmartClippingEngine
 from core.whisper_asr import get_asr_service
 
 
 logger = logging.getLogger(__name__)
+
+
+def _probe_fps(video_path: Path, default: float = 25.0) -> float:
+    """Source frame rate, for timecodes an editor will accept."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=r_frame_rate", "-of", "json", str(video_path)],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+        raw = json.loads(result.stdout)["streams"][0]["r_frame_rate"]
+        numerator, _, denominator = raw.partition("/")
+        rate = float(numerator) / float(denominator or 1)
+        return rate if 1.0 <= rate <= 480.0 else default
+    except Exception as exc:
+        logger.debug("读取帧率失败，按 %s fps 处理: %s", default, exc)
+        return default
 
 
 def _probe_duration(video_path: Path) -> float:
@@ -357,12 +379,17 @@ def _write_decision_list(
     segments: Sequence[Dict[str, Any]],
     source: str,
     topic: str,
-) -> Dict[str, str]:
-    """Write the selection as Markdown, EDL and SRT, and report the paths."""
+    fps: float,
+) -> Tuple[Dict[str, str], List[str]]:
+    """Write the selection as Markdown, EDL and SRT.
+
+    Returns the paths written and any per-format failures.
+    """
     written: Dict[str, str] = {}
+    failures: List[str] = []
     for suffix, body in (
         ("md", to_markdown(segments, source=source, topic=topic)),
-        ("edl", to_edl(segments, title=Path(source).stem or "aiVideo")),
+        ("edl", to_edl(segments, title=Path(source).stem or "aiVideo", fps=fps)),
         ("srt", to_srt(segments)),
     ):
         if not body.strip():
@@ -372,13 +399,26 @@ def _write_decision_list(
             path.write_text(body, encoding="utf-8")
             written[suffix] = f"output_data/{path.name}"
         except OSError as exc:
-            logger.warning("写出 %s 清单失败: %s", suffix, exc)
-    return written
+            logger.error("写出 %s 清单失败: %s", suffix, exc)
+            failures.append(f"{suffix}: {exc}")
+
+    # The list is the product now. A run that wrote none of it did not
+    # succeed, whatever the renderer managed; a partial write is reported so
+    # the caller knows which formats are missing.
+    if failures and not written:
+        raise RuntimeError("剪辑清单写入失败：" + "；".join(failures))
+    return written, failures
 
 
 def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
     """Run the complete measured/semantic multi-segment workflow."""
-    video_path = resolve_media_path(options["video_path"])
+    # Materialise here rather than in a route: a local path, a file:// URL, a
+    # direct .mp4 and a platform link all have to work from every caller --
+    # the sync route, the job handler and the batch script alike. Doing it in
+    # one of them left the others rejecting URLs outright.
+    video_path = materialize_video_source(
+        str(options["video_path"]), "clip", MAX_FILE_SIZE
+    )
     video_duration = _probe_duration(video_path)
     if video_duration < 8:
         raise ValueError("视频时长至少需要 8 秒")
@@ -422,7 +462,7 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
     if not selected:
         raise ValueError("未找到可用片段")
 
-    render = bool(options.get("render", True))
+    render = bool(options.get("render", False))
     stem = uuid.uuid4().hex
     output_path = OUTPUT_DIR / f"multi_clip_{stem}.mp4"
     if render:
@@ -438,13 +478,16 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
     # The decision list is an output in its own right, not a by-product: the
     # judgement about which moments matter is the part a dedicated editor
     # cannot do for you, and it is useful even when nothing is rendered.
-    decisions = _write_decision_list(stem, selected, str(video_path), options.get("topic", ""))
+    decisions, decision_errors = _write_decision_list(
+        stem, selected, str(video_path), options.get("topic", ""), _probe_fps(video_path)
+    )
 
     return {
         "status": "success",
         "output_video": f"output_data/{output_path.name}" if render else None,
         "rendered": render,
         "decision_list": decisions,
+        "decision_list_errors": decision_errors,
         "selected_segments": selected,
         "analysis": {
             "total_video_duration": round(video_duration, 3),

@@ -36,6 +36,7 @@ from core.runtime import (
     materialize_video_source as resolve_video_source,
     resolve_media_path,
     resolve_output_path,
+    validate_remote_url,
 )
 from core.smart_clipping import get_smart_segments, analyze_video_intelligence
 from core.whisper_asr import get_asr_service
@@ -139,6 +140,11 @@ app.include_router(jobs_router)
 
 # Mount static files and frontend
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "frontend")), name="static")
+# The payload reports artefacts as "output_data/<name>" -- a path relative to
+# the data root, which is what the batch script prints. Mounting the directory
+# under that same prefix means a client can fetch what it was handed without
+# knowing the mapping. /output stays for anything already using it.
+app.mount("/output_data", StaticFiles(directory=str(OUTPUT_DIR)), name="output_data")
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
 
 @app.post("/admin/retention/sweep", tags=["admin"])
@@ -215,7 +221,6 @@ def normalize_time(time_str: str) -> str:
     return time_str
 
 
-
 def safe_run_ffmpeg(cmd: List[str], timeout: int = 300) -> Dict[str, Any]:
     """Safely run ffmpeg command with timeout and error handling"""
     try:
@@ -249,13 +254,6 @@ def safe_run_ffmpeg(cmd: List[str], timeout: int = 300) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"视频处理异常: {str(e)}")
 
 
-
-
-
-
-
-
-
 # --- Gemini Mock Function with Error Handling ---
 
 
@@ -282,9 +280,6 @@ async def health_check():
             "smart_clipping": "available"
         }
     }
-
-
-
 
 
 @app.post("/cut916", tags=["video"])
@@ -373,7 +368,6 @@ async def burnsub(req: BurnSubReq):
         except ValueError:
             pass
         raise HTTPException(status_code=500, detail=f"字幕烧录失败: {str(e)}")
-
 
 
 # --- New: Intro-style auto highlights from URL ---
@@ -467,19 +461,7 @@ class SemanticAnalysisReq(BaseModel):
         return v.strip()
 
 
-
-
-
-
-
-
-
 # Pro功能API模型
-
-
-
-
-
 
 
 # 新增API模型
@@ -499,13 +481,6 @@ def _validate_canvas(width: int, height: int) -> None:
         raise ValueError(
             f"画布像素数不能超过 {MAX_CANVAS_PIXELS}（当前 {width}x{height}）"
         )
-
-
-
-
-
-
-
 
 
 @app.post("/analyze_video", tags=["video"])
@@ -617,11 +592,14 @@ async def extract_audio(req: AudioExtractionReq):
         # 获取音频信息
         audio_info = {}
         try:
-            import subprocess
-            result = subprocess.run([
-                "ffprobe", "-v", "quiet", "-print_format", "json", "-show_format",
-                "-show_streams", extracted_audio
-            ], capture_output=True, text=True)
+            # ffprobe is fast but not instant, and this is a coroutine: run it
+            # in a thread, and never without a timeout.
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format",
+                 "-show_streams", extracted_audio],
+                capture_output=True, text=True, timeout=30,
+            )
             
             if result.returncode == 0:
                 import json
@@ -716,44 +694,6 @@ async def semantic_analyze(req: SemanticAnalysisReq):
         raise HTTPException(status_code=500, detail=f"语义分析失败: {str(e)}")
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # 新增：智能多片段视频剪辑API
 class MultiSegmentClippingReq(BaseModel):
     video_path: str
@@ -772,18 +712,40 @@ class MultiSegmentClippingReq(BaseModel):
     asr_model_size: str = "base"
     asr_language: Optional[str] = None
     # The decision list is always produced. Rendering the 9:16 file is the
-    # expensive half and the half a real editor does better, so it is opt-out.
-    render: bool = True
+    # expensive half, and the half a dedicated editor does better, so a client
+    # that omits this gets the cheap answer rather than a surprise transcode.
+    render: bool = False
 
     @field_validator("video_path")
     @classmethod
     def validate_video_path(cls, value):
-        return str(resolve_media_path(value))
+        """Accept a managed local path or a public URL.
+
+        A remote URL is checked for scheme and address here and materialised
+        by the workflow; validating it as a local path rejected every platform
+        link before it reached the resolver.
+        """
+        value = str(value).strip()
+        if not value:
+            raise ValueError("视频路径不能为空")
+        if value.lower().startswith(("http://", "https://")):
+            return validate_remote_url(value)
+        try:
+            return str(resolve_media_path(value))
+        except FileNotFoundError as exc:
+            # Pydantic only converts ValueError into a 422; anything else
+            # escapes as a 500, which is the wrong answer for a bad request.
+            raise ValueError(str(exc)) from None
 
     @field_validator("subtitle_path")
     @classmethod
     def validate_subtitle_path(cls, value):
-        return str(resolve_media_path(value)) if value else None
+        if not value:
+            return None
+        try:
+            return str(resolve_media_path(value))
+        except FileNotFoundError as exc:
+            raise ValueError(str(exc)) from None
 
     @field_validator("topic")
     @classmethod
@@ -852,22 +814,6 @@ async def multi_segment_intelligent_clipping(req: MultiSegmentClippingReq):
         raise HTTPException(status_code=500, detail=f"智能多片段剪辑失败: {str(e)}")
 
 
-# 小红书发布相关API
-
-
-
-
-
-
-
-
-# 图片装饰相关API
-
-
-
-
-
-
 # 文件上传相关API
 
 @app.post("/upload/video", tags=["upload"])
@@ -913,25 +859,6 @@ async def upload_video(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"视频上传失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
-
-# LLM智能内容生成相关API
-
-
-
-# 高级拼图生成相关API
-
-
-# 智能封面生成相关API
-
-
-
-# 小红书级别拼图生成API
-
-
-
-
-# 单页渲染（单图或拼图）
-
 
 
 if __name__ == "__main__":

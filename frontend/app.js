@@ -7,6 +7,71 @@ const POLL_TIMEOUT_MS = 60 * 60 * 1000;
 const $ = (id) => document.getElementById(id);
 const state = { source: 'file', file: null };
 
+/* ── auth ────────────────────────────────────────────────── */
+/* The server is unauthenticated until AIVIDEO_API_KEY is set, at which point
+   every call but the page itself needs X-API-Key. Without this the UI loads
+   and then 401s on upload, submit and poll alike. */
+const KEY_STORAGE = 'aivideo.apiKey';
+
+function apiKey() {
+  try { return localStorage.getItem(KEY_STORAGE) || ''; } catch { return ''; }
+}
+
+function setApiKey(value) {
+  try { value ? localStorage.setItem(KEY_STORAGE, value) : localStorage.removeItem(KEY_STORAGE); }
+  catch { /* private mode: the key just will not persist */ }
+}
+
+/** fetch with the key attached, and a clear signal when it is rejected. */
+async function request(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const key = apiKey();
+  if (key) headers.set('X-API-Key', key);
+
+  const response = await fetch(`${API}${path}`, { ...options, headers });
+  if (response.status === 401) {
+    revealAuth(key ? 'API Key 无效，请重新填写' : '');
+    throw new Error('需要有效的 API Key');
+  }
+  return response;
+}
+
+function revealAuth(message) {
+  $('auth').classList.remove('hidden');
+  const note = $('auth-note');
+  note.textContent = message || '存在本浏览器，随请求发送';
+  note.className = `auth-note ${message ? 'bad' : ''}`;
+  if (message) $('api-key').focus();
+}
+
+$('api-key-save').addEventListener('click', async () => {
+  setApiKey($('api-key').value.trim());
+  const note = $('auth-note');
+  if (await serverAccepts()) {
+    note.textContent = '已保存';
+    note.className = 'auth-note good';
+  } else {
+    note.textContent = 'API Key 无效';
+    note.className = 'auth-note bad';
+  }
+});
+
+/** True when the current key (or no key) gets past the middleware. */
+async function serverAccepts() {
+  const headers = new Headers();
+  const key = apiKey();
+  if (key) headers.set('X-API-Key', key);
+  try {
+    const response = await fetch(`${API}/jobs/kinds`, { headers });
+    return response.status !== 401;
+  } catch {
+    return true;   // network trouble is not an auth problem
+  }
+}
+
+// Ask for a key only if this server actually wants one.
+(async () => { if (!(await serverAccepts())) revealAuth(''); })();
+
 /* ── source tabs ─────────────────────────────────────────── */
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.addEventListener('click', () => {
@@ -91,7 +156,7 @@ async function resolveSource() {
   say('正在上传…');
   const form = new FormData();
   form.append('file', state.file);
-  const response = await fetch(`${API}/upload/video`, { method: 'POST', body: form });
+  const response = await request('/upload/video', { method: 'POST', body: form });
   const body = await response.json().catch(() => ({}));
   if (!response.ok || body.status !== 'success') {
     throw new Error(body.detail || body.message || `上传失败 (${response.status})`);
@@ -101,14 +166,14 @@ async function resolveSource() {
 
 /** Submit as a background job and poll. Falls back to the synchronous route. */
 async function runJob(params) {
-  const submission = await fetch(`${API}/jobs`, {
+  const submission = await request('/jobs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ kind: 'multi_segment_clipping', params }),
   });
 
   if (submission.status === 404 || submission.status === 405) {
-    const direct = await fetch(`${API}/video/multi_segment_clipping`, {
+    const direct = await request('/video/multi_segment_clipping', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
@@ -128,7 +193,7 @@ async function pollJob(jobId) {
   while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
 
-    const response = await fetch(`${API}/jobs/${jobId}`);
+    const response = await request(`/jobs/${jobId}`);
     if (!response.ok) throw new Error(`无法查询任务状态 (${response.status})`);
     const job = await response.json();
 
@@ -195,17 +260,50 @@ function render(result) {
 
   const files = result.decision_list || {};
   const labels = { md: '清单 Markdown', edl: 'EDL（导入剪辑软件）', srt: '字幕 SRT' };
-  const links = Object.entries(files).map(([kind, path]) =>
-    `<a href="${API}/${path}" download>${labels[kind] || kind}</a>`);
+  const targets = Object.entries(files).map(([kind, path]) => ({ path, label: labels[kind] || kind }));
   if (result.output_video) {
-    links.unshift(`<a href="${API}/${result.output_video}" download class="strong">下载成片 MP4</a>`);
+    targets.unshift({ path: result.output_video, label: '下载成片 MP4', strong: true });
   }
-  $('downloads').innerHTML = links.join('');
+
+  // /output is behind the API key too, and <a download> cannot send a header,
+  // so each file is fetched with it and handed over as a blob.
+  const box = $('downloads');
+  box.innerHTML = '';
+  targets.forEach(({ path, label, strong }) => {
+    const link = document.createElement('a');
+    link.textContent = label;
+    link.href = `${API}/${path}`;
+    link.download = path.split('/').pop();
+    if (strong) link.className = 'strong';
+    link.addEventListener('click', async (event) => {
+      event.preventDefault();
+      try {
+        const response = await request(`/${path}`);
+        if (!response.ok) throw new Error(`下载失败 (${response.status})`);
+        const url = URL.createObjectURL(await response.blob());
+        const temp = document.createElement('a');
+        temp.href = url;
+        temp.download = link.download;
+        temp.click();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        say(error.message || '下载失败', 'error');
+      }
+    });
+    box.appendChild(link);
+  });
 
   const preview = $('preview');
   if (result.output_video) {
-    preview.src = `${API}/${result.output_video}`;
-    preview.classList.remove('hidden');
+    // Same reason: give the player a blob it can read.
+    request(`/${result.output_video}`)
+      .then((response) => (response.ok ? response.blob() : null))
+      .then((blob) => {
+        if (!blob) return;
+        preview.src = URL.createObjectURL(blob);
+        preview.classList.remove('hidden');
+      })
+      .catch(() => { /* the download link still works */ });
   } else {
     preview.removeAttribute('src');
     preview.classList.add('hidden');

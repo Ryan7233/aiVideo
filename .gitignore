@@ -101,3 +101,7 @@ dump.rdb
 .env.development
 .env.test
 .env.production
+# Coverage
+.coverage
+.coverage.*
+htmlcov/

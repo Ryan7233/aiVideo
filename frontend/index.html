@@ -12,6 +12,12 @@
   <div class="wrap">
     <h1>aiVideo</h1>
     <p>把一段长视频压成一份剪辑清单：哪几段值得剪，为什么，时间码多少。</p>
+    <div class="auth hidden" id="auth">
+      <label for="api-key">这个服务需要 API Key</label>
+      <input type="password" id="api-key" placeholder="AIVIDEO_API_KEY" autocomplete="off">
+      <button id="api-key-save" type="button">保存</button>
+      <span class="auth-note" id="auth-note">存在本浏览器，随请求发送</span>
+    </div>
   </div>
 </header>
 

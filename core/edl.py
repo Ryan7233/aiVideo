@@ -14,17 +14,27 @@ from __future__ import annotations
 from typing import Any, Dict, List, Sequence
 
 
-def _hms(seconds: float, *, frames: bool = False, fps: int = 25) -> str:
+def _clock(seconds: float) -> str:
+    """SRT-style hh:mm:ss,mmm."""
     total = max(0.0, float(seconds))
     hours, rest = divmod(total, 3600)
     minutes, secs = divmod(rest, 60)
-    if frames:
-        whole = int(secs)
-        frame = int(round((secs - whole) * fps))
-        if frame >= fps:  # rounding can push it past the last frame
-            whole, frame = whole + 1, 0
-        return f"{int(hours):02d}:{int(minutes):02d}:{whole:02d}:{frame:02d}"
     return f"{int(hours):02d}:{int(minutes):02d}:{secs:06.3f}".replace(".", ",")
+
+
+def _timecode(seconds: float, fps: float) -> str:
+    """SMPTE hh:mm:ss:ff, carried through a total frame count.
+
+    Rounding each field on its own let 59.999s at 25fps render as
+    ``00:00:60:00`` -- a timecode no editor will accept. Converting to whole
+    frames first and dividing back out makes the carry fall out naturally.
+    """
+    rate = max(1, int(round(fps)))
+    frame_index = int(round(max(0.0, float(seconds)) * rate))
+    seconds_total, frame = divmod(frame_index, rate)
+    minutes_total, secs = divmod(seconds_total, 60)
+    hours, minutes = divmod(minutes_total, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}:{frame:02d}"
 
 
 def to_markdown(segments: Sequence[Dict[str, Any]], *, source: str = "", topic: str = "") -> str:
@@ -47,8 +57,8 @@ def to_markdown(segments: Sequence[Dict[str, Any]], *, source: str = "", topic: 
         reason = str(details.get("reason") or segment.get("type") or "").strip()
         rows.append(
             f"| {index} "
-            f"| {_hms(segment.get('start_time', 0))[:-4]} "
-            f"| {_hms(segment.get('end_time', 0))[:-4]} "
+            f"| {_clock(segment.get('start_time', 0))[:-4]} "
+            f"| {_clock(segment.get('end_time', 0))[:-4]} "
             f"| {float(segment.get('duration', 0)):.1f}s "
             f"| {float(segment.get('score', 0)):.2f} "
             f"| {float(segment.get('semantic_score', 0)):.2f} "
@@ -59,12 +69,20 @@ def to_markdown(segments: Sequence[Dict[str, Any]], *, source: str = "", topic: 
     return "\n".join(header + rows) + "\n"
 
 
-def to_edl(segments: Sequence[Dict[str, Any]], *, title: str = "aiVideo", fps: int = 25) -> str:
+def to_edl(
+    segments: Sequence[Dict[str, Any]],
+    *,
+    title: str = "aiVideo",
+    fps: float = 25.0,
+) -> str:
     """CMX3600, which Premiere, Resolve and Final Cut all import.
 
-    Record timecode runs continuously from zero so the segments land back to
-    back on the timeline in the order they were chosen.
+    ``fps`` should be the source's own frame rate -- the workflow reads it
+    with ffprobe. A 30fps clip written at 25 lands every cut on the wrong
+    frame. Record timecode runs continuously from zero so the segments sit
+    back to back on the timeline in the order they were chosen.
     """
+    rate = max(1.0, float(fps))
     lines = [f"TITLE: {title}", "FCM: NON-DROP FRAME", ""]
     record = 0.0
     for index, segment in enumerate(segments, 1):
@@ -73,8 +91,8 @@ def to_edl(segments: Sequence[Dict[str, Any]], *, title: str = "aiVideo", fps: i
         duration = max(0.0, end - start)
         lines.append(
             f"{index:03d}  AX       V     C        "
-            f"{_hms(start, frames=True, fps=fps)} {_hms(end, frames=True, fps=fps)} "
-            f"{_hms(record, frames=True, fps=fps)} {_hms(record + duration, frames=True, fps=fps)}"
+            f"{_timecode(start, rate)} {_timecode(end, rate)} "
+            f"{_timecode(record, rate)} {_timecode(record + duration, rate)}"
         )
         reason = ((segment.get("semantic_details") or {}).get("reason")
                   or segment.get("type") or "")
@@ -92,14 +110,19 @@ def to_srt(segments: Sequence[Dict[str, Any]], *, relative: bool = True) -> str:
     """
     blocks: List[str] = []
     offset = 0.0
-    for index, segment in enumerate(segments, 1):
+    number = 0
+    for segment in segments:
+        span = max(0.0, float(segment.get("duration", 0)))
         text = (segment.get("preview_text") or segment.get("text") or "").strip()
-        if not text:
-            continue
-        start = float(segment.get("start_time", 0))
-        end = float(segment.get("end_time", 0))
-        if relative:
-            start, end = offset, offset + max(0.0, end - start)
-        blocks.append(f"{index}\n{_hms(start)} --> {_hms(end)}\n{text}\n")
-        offset += max(0.0, float(segment.get("duration", 0)))
+        if text:
+            start = float(segment.get("start_time", 0))
+            end = float(segment.get("end_time", 0))
+            if relative:
+                start, end = offset, offset + max(0.0, end - start)
+            number += 1
+            blocks.append(f"{number}\n{_clock(start)} --> {_clock(end)}\n{text}\n")
+        # Advance regardless: skipping a silent segment without moving the
+        # offset pushed every later caption back onto the wrong moment, and
+        # numbering has to stay contiguous for a valid SRT.
+        offset += span
     return "\n".join(blocks)

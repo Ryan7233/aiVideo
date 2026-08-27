@@ -159,3 +159,19 @@ td.strong { font-weight: 600; color: var(--accent); }
 .downloads a.strong { background: var(--accent); color: #fff; border-color: var(--accent); }
 
 video { width: 100%; margin-top: 18px; border-radius: 8px; background: #000; }
+
+/* API key — only shown when the server actually requires one */
+.auth {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  margin-top: 14px; padding: 12px 14px;
+  background: var(--sunk); border: 1px solid var(--line); border-radius: 8px;
+}
+.auth label { font-size: 13px; font-weight: 500; }
+.auth input { width: auto; flex: 1 1 200px; font-family: var(--mono); font-size: 13px; }
+.auth button {
+  font: inherit; font-size: 13px; padding: 8px 16px; cursor: pointer;
+  color: #fff; background: var(--accent); border: none; border-radius: 7px;
+}
+.auth-note { font-size: 12px; color: var(--faint); }
+.auth-note.bad { color: var(--risk); }
+.auth-note.good { color: var(--ok); }

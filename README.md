@@ -47,6 +47,9 @@ python start_server.py
 默认只监听回环地址。要对外提供服务，先设置 `AIVIDEO_API_KEY`，再用 compose 的
 `production` profile 把 nginx 放在前面。
 
+设置了 Key 之后，内置 UI 首次打开会要求填写（存在浏览器本地，随每个请求发送）；
+批处理脚本用 `--api-key` 传。或者由反向代理注入 `X-API-Key`，前端就不需要知道它。
+
 ## 接口
 
 ```bash
