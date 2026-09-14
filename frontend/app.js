@@ -198,7 +198,19 @@ function showStage(name) {
 }
 
 function showError(message) {
-  $('error-text').textContent = message;
+  // A failed job's error carries the Python traceback after the first line;
+  // the person needs the line, the traceback goes behind a fold.
+  const [head, ...rest] = String(message || '失败').split('\n');
+  const box = $('error-text');
+  box.textContent = head;
+  if (rest.length) {
+    const details = document.createElement('details');
+    details.innerHTML = '<summary>详细信息</summary>';
+    const pre = document.createElement('pre');
+    pre.textContent = rest.join('\n').trim();
+    details.appendChild(pre);
+    box.appendChild(details);
+  }
   showStage('error');
 }
 
