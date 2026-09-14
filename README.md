@@ -24,9 +24,16 @@
 2. Faster-Whisper 转写。中文默认输出简体，并按**词级时间戳重新分句**——Whisper 自己的
    分段跟着解码窗口走，连续口播经常整段几十秒返回，那样每个候选窗口拿到的文本都一样，
    语义评分就失去区分度。
-3. 一次 FFmpeg 解码同时采集场景变化、运动幅度（signalstats YDIF）和音频 RMS。
+3. 每 300 秒一块覆盖全片；每块一次 FFmpeg 解码同时采集场景变化、运动幅度（signalstats YDIF）和音频 RMS。
 4. 候选窗口批量送 LLM 打分并给出理由；未配置 API Key 时回退到 jieba 分词 + 词典规则。
-5. 按开场 / 高潮 / 结尾约束选出互不重叠的片段，写出清单（可选渲染成片）。
+5. 有转写时从语句边界组合候选，评分文本与实际切口一致；没有转写时使用视听滑窗。
+   默认 `selection_mode="highlights"` 选择高分片段，`summary` 模式优先从首尾区域挑选
+   分数不低于 0.35 的片段。该阈值是工程初始值，尚未经人工素材集校准。
+   不截断转写语句来凑时长；遵守总时长与不重叠约束，段数不足时返回 `warnings`。
+   显式传入旧的 `include_intro/include_conclusion` 参数仍可覆盖模式默认值。
+   单片段最长 30 秒，短于 5 秒的转写语句会尝试与邻句组合；不可组合时提示调整时长。
+6. SRT 使用选中片段内每句的原始时间戳重新计时，保留全文；预览文本可截断，但导出不会截断。
+   测量失败区间会在 `analysis.measurement` 中报告；窗口缺失的评分维度被排除，剩余权重重新归一化。
 
 ## 快速启动
 
@@ -86,10 +93,12 @@ curl http://127.0.0.1:8000/jobs/<job_id>
 ```text
 api/main.py                 FastAPI 路由与输入校验
 core/video_workflow.py      主流程：选段编排与可选渲染
+core/candidates.py          沿转写语句边界组合候选
+core/evaluation.py          结构检查与人工标注区间评估
 core/edl.py                 剪辑清单（Markdown / EDL / SRT）
 core/whisper_asr.py         Faster-Whisper 转写
 core/utterances.py          按词级时间戳重新分句
-core/smart_clipping.py      一次解码采集画面 / 运动 / 音频
+core/smart_clipping.py      分块覆盖全片，采集画面 / 运动 / 音频
 core/semantic_scoring.py    候选片段打分（LLM 优先，词典规则兜底）
 core/semantic_analysis.py   中文语义评分
 core/text_tokenizer.py      中英文分词与词典匹配
@@ -115,10 +124,31 @@ node --check frontend/app.js
 
 ## 已知边界
 
-- 没有发布能力。小红书没有开放的第三方发布接口，所以流程止于「导出，手动发」。
-- 语义评分未配置 LLM 时是词典法。它能区分口水话和有内容的话，但判断不了
-  「流畅但没信息量」——那需要真的读懂，配一个 API Key 才有。
-- 并发闸门是进程内信号量。多个 Celery worker 时实际上限是 worker 数 × 该值。
+- 语句边界来自 ASR 的标点、停顿与长度上限；边界对齐不等于语义上下文一定完整。
+- 结构化摘要的首尾约束与贪心选择不保证全局最优；请根据人工复核调整模式与权重。
+- 没有发布能力，流程止于导出。
+- 语义评分未配置 LLM 时是词典法，模型是否改善真实选段需要人工标注验证。
+- 并发闸门是进程内信号量。多个 Celery worker 时实际上限是 worker 进程数 × 该值。
+
+## 真实素材验收
+
+```bash
+python scripts/evaluate_clipping.py input_data/demo.mp4 \
+  --topic 内容要点 --segments 3 --duration 25 \
+  --output output_data/evaluations/demo.json
+```
+
+默认用离线规则评分；ASR 首次使用仍需要缓存模型。显式传入 `--scoring-mode llm` 才强制使用配置的外部模型。
+报告包含耗时、选段、测量覆盖、字幕切口、重复文本和所有产物路径。它不是“模型准确率”。
+可用 `--annotations path/to/labels.json` 提供人工认可区间：
+
+```json
+{"accepted": [{"start_time": 10.0, "end_time": 20.0}]}
+```
+
+示例时间仅说明格式，不是样片标注。提供标注后按一对一时间区间 IoU ≥ 0.5 计算返回片段的
+命中比例和人工区间召回率；未提供标注时 `human_metrics` 为 null。该指标衡量与人工时间区间的
+一致性，不代替观看判断；相同素材、标注、模型、参数下才可比较版本效果。
 
 ## License
 

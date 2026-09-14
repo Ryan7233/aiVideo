@@ -124,6 +124,7 @@ async function run() {
       video_path: videoPath,
       topic: $('topic').value.trim(),
       target_segments: Number($('segments').value),
+      selection_mode: $('selection-mode').value,
       total_duration: Number($('duration').value),
       semantic_weight: Number($('w-sem').value),
       visual_weight: Number($('w-vis').value),
@@ -238,11 +239,15 @@ function render(result) {
     tile('候选窗口', analysis.analyzed_segments || 0),
     tile('综合分', (quality.overall_score || 0).toFixed(2)),
     source ? `<p class="note">${escapeHtml(source)}</p>` : '',
+    ...(result.warnings || []).map(message => `<p class="note">${escapeHtml(message)}</p>`),
+    ...(result.decision_list_errors || []).map(message => `<p class="note">导出失败：${escapeHtml(message)}</p>`),
   ].join('');
 
   const body = $('clips').querySelector('tbody');
   body.innerHTML = segments.map((segment, index) => {
     const details = segment.semantic_details || {};
+    const metric = (name) => segment.available_dimensions?.[name] === false
+      ? '—' : Number(segment[`${name}_score`]).toFixed(2);
     const why = details.reason || segment.type || '';
     const text = segment.preview_text || '';
     return `<tr>
@@ -251,9 +256,9 @@ function render(result) {
       <td class="num">${hms(segment.end_time)}</td>
       <td class="num">${Number(segment.duration).toFixed(1)}s</td>
       <td class="num strong">${Number(segment.score).toFixed(2)}</td>
-      <td class="num">${Number(segment.semantic_score).toFixed(2)}</td>
-      <td class="num">${Number(segment.visual_score).toFixed(2)}</td>
-      <td class="num">${Number(segment.audio_score).toFixed(2)}</td>
+      <td class="num">${metric('semantic')}</td>
+      <td class="num">${metric('visual')}</td>
+      <td class="num">${metric('audio')}</td>
       <td>${why ? `<b>${escapeHtml(why)}</b>` : ''}${text ? `<span class="quote">${escapeHtml(text)}</span>` : ''}</td>
     </tr>`;
   }).join('');

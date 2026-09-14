@@ -27,18 +27,20 @@ class SmartClippingEngine:
         self.min_segment_gap = 2.0  # 最小片段间隔(秒)
         self.motion_sample_fps = 2  # 运动采样频率(帧/秒)
     
-    def analyze_video_content(self, video_path: str, max_duration: int = 900) -> Dict:
+    def analyze_video_content(self, video_path: str, max_duration: Optional[int] = 900,
+                              chunk_seconds: int = 300) -> Dict:
         """
         全面分析视频内容
 
-        Scene changes, motion and audio energy are all collected in a single
-        FFmpeg decode. The previous implementation ran three separate commands,
+        Scene changes, motion and audio energy share one FFmpeg decode per
+        chunk. The previous implementation ran three separate commands,
         each decoding the whole file, and scraped the numbers back out of
         stderr with regexes that broke silently on new FFmpeg releases.
 
         Args:
             video_path: 视频文件路径
-            max_duration: 最大分析时长(秒)，避免长视频分析过久
+            max_duration: 最大分析时长(秒)，None 覆盖全片
+            chunk_seconds: 每次解码的最长时长，失败区间单独报告
 
         Returns:
             包含场景变化、音频能量、视频时长等信息的字典
@@ -50,12 +52,34 @@ class SmartClippingEngine:
             if duration <= 0:
                 raise ValueError("Invalid video duration")
 
-            analysis_duration = min(duration, max_duration)
-            measurements = self._measure_streams(video_path, analysis_duration)
+            analysis_duration = duration if max_duration is None else min(duration, max_duration)
+            if chunk_seconds <= 0:
+                raise ValueError("chunk_seconds must be positive")
+            measurements = {key: [] for key in ("scene_changes", "audio_energy", "motion_activity")}
+            intervals, errors = [], []
+            start = 0.0
+            while start < analysis_duration:
+                span = min(chunk_seconds, analysis_duration - start)
+                try:
+                    chunk = self._measure_streams(video_path, span, start=start)
+                    for key in measurements:
+                        measurements[key].extend(
+                            {**point, "timestamp": point["timestamp"] + start}
+                            for point in chunk[key] if 0 <= point["timestamp"] < span
+                        )
+                    intervals.append({"start": start, "end": start + span})
+                except Exception as exc:
+                    errors.append({"start": start, "end": start + span, "error": str(exc)})
+                    logger.warning("Measurement chunk %.1f-%.1f failed: %s", start, start + span, exc)
+                start += span
 
             return {
                 'duration': duration,
                 'analysis_duration': analysis_duration,
+                'measured_intervals': intervals,
+                'measurement_errors': errors,
+                'measured_seconds': sum(item['end'] - item['start'] for item in intervals),
+                'degraded': bool(errors),
                 'scene_changes': measurements['scene_changes'],
                 'audio_energy': measurements['audio_energy'],
                 'motion_activity': measurements['motion_activity'],
@@ -104,7 +128,7 @@ class SmartClippingEngine:
                     continue
         return points
 
-    def _measure_streams(self, video_path: str, duration: float) -> Dict[str, List[Dict]]:
+    def _measure_streams(self, video_path: str, duration: float, start: float = 0.0) -> Dict[str, List[Dict]]:
         """Run one decode that emits scene, motion and audio metadata."""
         with tempfile.TemporaryDirectory(prefix="aivideo_analysis_") as tmp:
             tmp_path = Path(tmp)
@@ -137,7 +161,7 @@ class SmartClippingEngine:
 
             cmd = [
                 "ffmpeg", "-hide_banner", "-nostats", "-loglevel", "error",
-                "-i", video_path, "-t", f"{duration:.3f}",
+                "-ss", f"{start:.3f}", "-i", video_path, "-t", f"{duration:.3f}",
                 "-filter_complex", ";".join(chains),
                 *maps, "-f", "null", "-",
             ]
@@ -455,6 +479,8 @@ class SmartClippingEngine:
         return {
             'duration': duration,
             'analysis_duration': duration,
+            'measured_intervals': [],
+            'measured_seconds': 0.0,
             'scene_changes': [],
             'audio_energy': [],
             'motion_activity': [],

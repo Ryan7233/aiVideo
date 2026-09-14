@@ -16,10 +16,11 @@ from typing import Any, Dict, List, Sequence
 
 def _clock(seconds: float) -> str:
     """SRT-style hh:mm:ss,mmm."""
-    total = max(0.0, float(seconds))
-    hours, rest = divmod(total, 3600)
-    minutes, secs = divmod(rest, 60)
-    return f"{int(hours):02d}:{int(minutes):02d}:{secs:06.3f}".replace(".", ",")
+    total = round(max(0.0, float(seconds)) * 1000)
+    seconds_total, millis = divmod(total, 1000)
+    minutes_total, secs = divmod(seconds_total, 60)
+    hours, minutes = divmod(minutes_total, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
 def _timecode(seconds: float, fps: float) -> str:
@@ -55,15 +56,19 @@ def to_markdown(segments: Sequence[Dict[str, Any]], *, source: str = "", topic: 
     for index, segment in enumerate(segments, 1):
         details = segment.get("semantic_details") or {}
         reason = str(details.get("reason") or segment.get("type") or "").strip()
+        def metric(name):
+            if segment.get("available_dimensions", {}).get(name) is False:
+                return "—"
+            return f"{float(segment.get(name + '_score', 0)):.2f}"
         rows.append(
             f"| {index} "
             f"| {_clock(segment.get('start_time', 0))[:-4]} "
             f"| {_clock(segment.get('end_time', 0))[:-4]} "
             f"| {float(segment.get('duration', 0)):.1f}s "
             f"| {float(segment.get('score', 0)):.2f} "
-            f"| {float(segment.get('semantic_score', 0)):.2f} "
-            f"| {float(segment.get('visual_score', 0)):.2f} "
-            f"| {float(segment.get('audio_score', 0)):.2f} "
+            f"| {metric('semantic')} "
+            f"| {metric('visual')} "
+            f"| {metric('audio')} "
             f"| {reason} |"
         )
     return "\n".join(header + rows) + "\n"
@@ -113,12 +118,19 @@ def to_srt(segments: Sequence[Dict[str, Any]], *, relative: bool = True) -> str:
     number = 0
     for segment in segments:
         span = max(0.0, float(segment.get("duration", 0)))
-        text = (segment.get("preview_text") or segment.get("text") or "").strip()
-        if text:
-            start = float(segment.get("start_time", 0))
-            end = float(segment.get("end_time", 0))
+        cut_start = float(segment.get("start_time", 0))
+        cut_end = float(segment.get("end_time", 0))
+        cues = segment.get("cues")
+        if cues is None:  # Compatibility for callers without timed transcripts.
+            cues = [{"start": cut_start, "end": cut_end,
+                     "text": segment.get("text") or segment.get("preview_text") or ""}]
+        for cue in cues:
+            text = cue.get("text", "").strip()
+            start, end = float(cue["start"]), float(cue["end"])
+            if not text or start < cut_start - 0.001 or end > cut_end + 0.001 or end <= start:
+                continue
             if relative:
-                start, end = offset, offset + max(0.0, end - start)
+                start, end = offset + start - cut_start, offset + end - cut_start
             number += 1
             blocks.append(f"{number}\n{_clock(start)} --> {_clock(end)}\n{text}\n")
         # Advance regardless: skipping a silent segment without moving the

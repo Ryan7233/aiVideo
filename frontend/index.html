@@ -50,6 +50,14 @@
 
     <div class="grid">
       <label class="field">
+        <span>选段模式</span>
+        <select id="selection-mode">
+          <option value="highlights" selected>精彩片段 · 优先选高分内容</option>
+          <option value="summary">结构化摘要 · 优先覆盖开场和结尾</option>
+        </select>
+        <small>摘要模式也会跳过低分首尾；沿语句边界切分，实际段数可能少于目标</small>
+      </label>
+      <label class="field">
         <span>主题</span>
         <input type="text" id="topic" placeholder="例如：小红书运营">
         <small>用来判断片段是否切题</small>
@@ -62,7 +70,7 @@
 
       <label class="field">
         <span>总时长（秒）</span>
-        <input type="number" id="duration" value="60" min="5" max="600">
+        <input type="number" id="duration" value="60" min="5" max="300">
       </label>
 
       <label class="field">

@@ -705,9 +705,10 @@ class MultiSegmentClippingReq(BaseModel):
     semantic_weight: float = 0.4
     visual_weight: float = 0.3
     audio_weight: float = 0.3
-    include_intro: bool = True
+    selection_mode: str = "highlights"
+    include_intro: Optional[bool] = None
     include_highlights: bool = True
-    include_conclusion: bool = True
+    include_conclusion: Optional[bool] = None
     enable_content_analysis: bool = True
     asr_model_size: str = "base"
     asr_language: Optional[str] = None
@@ -715,6 +716,13 @@ class MultiSegmentClippingReq(BaseModel):
     # expensive half, and the half a dedicated editor does better, so a client
     # that omits this gets the cheap answer rather than a surprise transcode.
     render: bool = False
+
+    @field_validator("selection_mode")
+    @classmethod
+    def validate_selection_mode(cls, value):
+        if value not in {"highlights", "summary"}:
+            raise ValueError("选段模式必须是 highlights 或 summary")
+        return value
 
     @field_validator("video_path")
     @classmethod

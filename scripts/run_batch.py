@@ -58,6 +58,7 @@ def main() -> int:
     parser.add_argument("--api-key", default="", help="服务端设置了 AIVIDEO_API_KEY 时需要")
     parser.add_argument("--topic", default="", help="用于判断片段是否切题")
     parser.add_argument("--segments", type=int, default=3)
+    parser.add_argument("--mode", choices=["highlights", "summary"], default="highlights")
     parser.add_argument("--duration", type=float, default=60.0, help="总时长（秒）")
     parser.add_argument("--asr-model", default="base", choices=["tiny", "base", "small"])
     parser.add_argument("--no-asr", action="store_true", help="跳过语音识别")
@@ -84,6 +85,7 @@ def main() -> int:
                     "video_path": str(video),
                     "topic": args.topic,
                     "target_segments": args.segments,
+                    "selection_mode": args.mode,
                     "total_duration": args.duration,
                     "enable_content_analysis": not args.no_asr,
                     "asr_model_size": args.asr_model,

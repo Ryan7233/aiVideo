@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import re
 import subprocess
 import uuid
@@ -16,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from core.concurrency import run_ffmpeg
+from core.candidates import build_windows
 from core.edl import to_edl, to_markdown, to_srt
 from core.config import MAX_FILE_SIZE
 from core.runtime import (
@@ -151,38 +151,12 @@ def _build_candidates(
     transcript: Sequence[Dict[str, Any]],
     analysis: Dict[str, Any],
     weights: Dict[str, float],
+    maximum_duration: float = 30.0,
 ) -> List[Dict[str, Any]]:
-    step = max(3.0, window_duration / 2.0)
-    last_start = max(0.0, duration - window_duration)
-    starts = [index * step for index in range(int(math.floor(last_start / step)) + 1)]
-    if not starts or abs(starts[-1] - last_start) > 0.5:
-        starts.append(last_start)
-
     scenes = analysis.get("scene_changes", [])
     audio = analysis.get("audio_energy", [])
     motion = analysis.get("motion_activity", [])
-    has_semantics = bool(transcript)
-    active_weights = dict(weights)
-    if not has_semantics:
-        active_weights["semantic"] = 0.0
-    total_weight = sum(max(0.0, value) for value in active_weights.values()) or 1.0
-    active_weights = {key: max(0.0, value) / total_weight for key, value in active_weights.items()}
-
-    # Collect every window first so the semantic pass can score them in one
-    # batch; scoring them one at a time would mean one LLM call per candidate.
-    windows: List[Dict[str, Any]] = []
-    for start in starts:
-        end = min(duration, start + window_duration)
-        windows.append({
-            "start": start,
-            "end": end,
-            "duration": end - start,
-            "text": " ".join(
-                segment["text"]
-                for segment in transcript
-                if float(segment["start"]) < end and float(segment["end"]) > start
-            ).strip(),
-        })
+    windows = build_windows(duration, window_duration, transcript, maximum_duration)
 
     semantic_scores = get_semantic_scorer().score_windows(windows, topic)
 
@@ -215,6 +189,26 @@ def _build_candidates(
         semantic_details["source"] = scored.source
         if scored.reason:
             semantic_details["reason"] = scored.reason
+        intervals = analysis.get("measured_intervals")
+        if intervals is None:
+            covered = not analysis.get("degraded") and end <= analysis.get("analysis_duration", duration) + 0.001
+        else:
+            cursor = start
+            for interval in intervals:
+                if interval["start"] <= cursor + 0.001:
+                    cursor = max(cursor, interval["end"])
+            covered = cursor >= end - 0.001
+        available = {
+            "semantic": bool(window_text),
+            "visual": covered and bool(window_motion or window_scenes),
+            "audio": covered and bool(window_audio),
+        }
+        active_weights = {key: max(0.0, weights[key]) if available[key] else 0.0
+                          for key in weights}
+        total_weight = sum(active_weights.values())
+        if total_weight <= 0:
+            continue  # No requested dimension has evidence; do not invent a score.
+        active_weights = {key: value / total_weight for key, value in active_weights.items()}
         total_score = (
             semantic_score * active_weights["semantic"]
             + visual_score * active_weights["visual"]
@@ -226,6 +220,10 @@ def _build_candidates(
                 "end_time": round(end, 3),
                 "duration": round(end - start, 3),
                 "text": window_text,
+                "cues": window["cues"],
+                "boundary_source": window["boundary_source"],
+                "available_dimensions": available,
+                "effective_weights": active_weights,
                 "semantic_score": semantic_score,
                 "visual_score": visual_score,
                 "audio_score": audio_score,
@@ -264,25 +262,34 @@ def _select_segments(
     include_intro: bool,
     include_highlights: bool,
     include_conclusion: bool,
+    total_budget: Optional[float] = None,
+    section_min_score: float = 0.35,
 ) -> List[Dict[str, Any]]:
     selected: List[Dict[str, Any]] = []
+
+    def eligible(items):
+        used = sum(item["end_time"] - item["start_time"] for item in selected)
+        return [item for item in items if not _overlaps(item, selected)
+                and (total_budget is None or used + item["end_time"] - item["start_time"] <= total_budget + 0.001)]
+
     if include_intro and len(selected) < count:
-        intro_candidates = [
+        intro_candidates = eligible([
             item for item in candidates if item["start_time"] <= video_duration * 0.2
-        ]
+            and item["score"] >= section_min_score
+        ])
         if intro_candidates:
-            chosen = min(intro_candidates, key=lambda item: (item["start_time"], -item["score"])).copy()
+            chosen = max(intro_candidates, key=lambda item: item["score"]).copy()
             chosen["type"] = "intro"
             selected.append(chosen)
     if include_conclusion and len(selected) < count:
-        conclusion_candidates = [
+        conclusion_candidates = eligible([
             item
             for item in candidates
-            if item["end_time"] >= video_duration * 0.8 and not _overlaps(item, selected)
-        ]
+            if item["end_time"] >= video_duration * 0.8 and item["score"] >= section_min_score
+        ])
         if conclusion_candidates:
             chosen = max(
-                conclusion_candidates, key=lambda item: (item["end_time"], item["score"])
+                conclusion_candidates, key=lambda item: item["score"]
             ).copy()
             chosen["type"] = "conclusion"
             selected.append(chosen)
@@ -290,14 +297,14 @@ def _select_segments(
         for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
             if len(selected) >= count:
                 break
-            if not _overlaps(candidate, selected):
+            if eligible([candidate]):
                 chosen = candidate.copy()
                 chosen["type"] = "highlight"
                 selected.append(chosen)
     for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
         if len(selected) >= count:
             break
-        if not _overlaps(candidate, selected):
+        if eligible([candidate]):
             chosen = candidate.copy()
             chosen["type"] = "best_available"
             selected.append(chosen)
@@ -412,6 +419,16 @@ def _write_decision_list(
 
 def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
     """Run the complete measured/semantic multi-segment workflow."""
+    mode = options.get("selection_mode", "highlights")
+    if mode not in {"highlights", "summary"}:
+        raise ValueError("selection_mode 必须是 highlights 或 summary")
+    # Optional old flags remain explicit overrides for existing API clients.
+    def flag(name, default):
+        value = options.get(name)
+        return default if value is None else bool(value)
+
+    intro = flag("include_intro", mode == "summary")
+    conclusion = flag("include_conclusion", mode == "summary")
     # Materialise here rather than in a route: a local path, a file:// URL, a
     # direct .mp4 and a platform link all have to work from every caller --
     # the sync route, the job handler and the batch script alike. Doing it in
@@ -441,7 +458,7 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
         options.get("asr_language"),
     )
     analysis = SmartClippingEngine().analyze_video_content(
-        str(video_path), max_duration=min(900, int(math.ceil(video_duration)))
+        str(video_path), max_duration=None
     )
     weights = {
         "semantic": float(options.get("semantic_weight", 0.4)),
@@ -449,18 +466,28 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
         "audio": float(options.get("audio_weight", 0.3)),
     }
     candidates = _build_candidates(
-        video_duration, window_duration, options.get("topic", ""), transcript, analysis, weights
+        video_duration, window_duration, options.get("topic", ""), transcript, analysis, weights,
+        maximum_duration=min(30.0, desired_total),
     )
     selected = _select_segments(
         candidates,
         video_duration,
         count,
-        bool(options.get("include_intro", True)),
+        intro,
         bool(options.get("include_highlights", True)),
-        bool(options.get("include_conclusion", True)),
+        conclusion,
+        total_budget=desired_total,
     )
     if not selected:
-        raise ValueError("未找到可用片段")
+        raise ValueError("未找到符合时长与完整语句边界的可用片段，或所选评分维度没有有效测量；请调整时长或权重")
+
+    warnings = []
+    if len(selected) < count:
+        warnings.append(f"在完整语句、不重叠和总时长约束下仅选出 {len(selected)}/{count} 段")
+    if analysis.get("degraded"):
+        warnings.append("部分视听测量不可用；缺失维度已排除并重新归一化权重")
+    if transcription_meta.get("source") == "unavailable":
+        warnings.append("转写不可用，已使用视听窗口；切口不保证完整语句")
 
     render = bool(options.get("render", False))
     stem = uuid.uuid4().hex
@@ -469,7 +496,7 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
         _combine_segments(video_path, selected, output_path)
 
     for segment in selected:
-        segment["preview_text"] = segment.pop("text", "")[:300]
+        segment["preview_text"] = segment.get("text", "")[:300]
         segment["score"] = round(segment["score"], 4)
         segment["semantic_score"] = round(segment["semantic_score"], 4)
         segment["visual_score"] = round(segment["visual_score"], 4)
@@ -488,6 +515,7 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
         "rendered": render,
         "decision_list": decisions,
         "decision_list_errors": decision_errors,
+        "warnings": warnings,
         "selected_segments": selected,
         "analysis": {
             "total_video_duration": round(video_duration, 3),
@@ -495,14 +523,20 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
             "selected_segments": len(selected),
             "total_output_duration": round(sum(item["duration"] for item in selected), 3),
             "transcription": transcription_meta,
+            "measurement": {
+                "measured_seconds": analysis.get("measured_seconds", 0.0),
+                "intervals": analysis.get("measured_intervals", []),
+                "errors": analysis.get("measurement_errors", []),
+            },
             "selection_strategy": {
+                "mode": mode,
                 "weights": weights,
                 "target_segments": count,
                 "requested_total_duration": desired_total,
                 "segment_duration": window_duration,
-                "include_intro": bool(options.get("include_intro", True)),
+                "include_intro": intro,
                 "include_highlights": bool(options.get("include_highlights", True)),
-                "include_conclusion": bool(options.get("include_conclusion", True)),
+                "include_conclusion": conclusion,
             },
         },
         "quality_metrics": {
