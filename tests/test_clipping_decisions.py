@@ -165,3 +165,82 @@ def test_human_metrics_require_annotations_and_do_not_double_count():
 def test_srt_milliseconds_carry_at_minute_boundary():
     from core.edl import _clock
     assert _clock(59.9999) == "00:01:00,000"
+
+
+def _spoken(start, text, score, width=10):
+    return {"start_time": start, "end_time": start + width, "score": score, "text": text}
+
+
+def test_repeated_line_at_another_time_is_not_selected_twice():
+    slogan = "大家好，欢迎来到我的频道，记得点赞关注。"
+    candidates = [_spoken(0, slogan, .9), _spoken(50, slogan, .85),
+                  _spoken(20, "今天讲的是三个具体的方法。", .7)]
+    skipped = []
+    selected = _select_segments(candidates, 100, 2, False, True, False, skipped_duplicates=skipped)
+    assert [s["start_time"] for s in selected] == [0, 20]
+    assert [s["start_time"] for s in skipped] == [50]
+
+
+def test_whisper_loop_over_silence_counts_as_the_same_content():
+    phrase = "谢谢观看。"
+    candidates = [_spoken(0, phrase * 3, .9), _spoken(40, phrase, .8, width=5),
+                  _spoken(70, "这是完全不同的一句结束语。", .5)]
+    selected = _select_segments(candidates, 100, 2, False, True, False)
+    assert [s["start_time"] for s in selected] == [0, 70]
+
+
+def test_near_repeat_with_padding_is_a_duplicate_but_shared_words_are_not():
+    line = "这个方法的关键是先切分完整句子再核实主题"
+    candidates = [_spoken(0, line, .9),
+                  _spoken(30, line + "，然后再检查。", .8),
+                  _spoken(60, "关键是核实每一段和主题的关系，而不是句子长度。", .7)]
+    selected = _select_segments(candidates, 100, 3, False, True, False)
+    assert [s["start_time"] for s in selected] == [0, 60]
+
+
+def test_windows_without_text_are_never_treated_as_duplicates():
+    candidates = [_spoken(s, "", score) for s, score in [(0, .9), (20, .8), (40, .7)]]
+    selected = _select_segments(candidates, 100, 3, False, True, False)
+    assert len(selected) == 3
+
+
+def test_traditional_and_simplified_repeats_are_the_same_content():
+    candidates = [_spoken(0, "第一个重点是选断，一条长视频里真正值得剪的可能只有三四处。", .9),
+                  _spoken(60, "第一個重點是選斷，一條長視頻裡真正值得剪的可能只有三四處。", .85),
+                  _spoken(30, "第二个重点是把起止点标清楚。", .7)]
+    selected = _select_segments(candidates, 100, 2, False, True, False)
+    assert [s["start_time"] for s in selected] == [0, 30]
+
+
+def test_asr_output_is_simplified_even_when_whisper_drifts():
+    from core.whisper_asr import WhisperASRService
+
+    class Word:
+        def __init__(self, word, start, end):
+            self.word, self.start, self.end = word, start, end
+
+    class Segment:
+        id = seek = 0
+        tokens = []
+        temperature = avg_logprob = compression_ratio = no_speech_prob = 0.0
+
+        def __init__(self, start, end, text, words):
+            self.start, self.end, self.text, self.words = start, end, text, words
+
+    class Info:
+        language, language_probability, duration = "zh", 1.0, 4.0
+
+    service = WhisperASRService(model_size="tiny")
+    result = service._process_transcription_result([
+        Segment(0, 2, "第一個重點。", [Word("第一個", 0, 1), Word("重點。", 1, 2)]),
+        Segment(2, 4, "第二个重点。", [Word("第二个", 2, 3), Word("重点。", 3, 4)]),
+    ], Info())
+    assert result["full_text"] == "第一个重点。 第二个重点。"
+    assert [s["text"] for s in result["segments"]] == ["第一个重点。", "第二个重点。"]
+
+
+def test_non_chinese_transcripts_are_left_alone():
+    from core.chinese import to_simplified
+    assert to_simplified("Keep this exactly, 123.") == "Keep this exactly, 123."
+    assert to_simplified("") == ""
+    assert to_simplified(None) == ""

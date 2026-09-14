@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from core.chinese import to_simplified
 from core.concurrency import run_ffmpeg
 from core.candidates import build_windows
 from core.edl import to_edl, to_markdown, to_srt
@@ -241,6 +242,47 @@ def _overlaps(candidate: Dict[str, Any], selected: Iterable[Dict[str, Any]]) -> 
     )
 
 
+# Share of the shorter text's character bigrams that must reappear in the
+# other text before the two count as the same content. Engineering default,
+# not calibrated on annotated material; see `section_min_score`.
+DUPLICATE_TEXT_SIMILARITY = 0.8
+
+
+def _normalized_text(text: Any) -> str:
+    # Simplify here as well as in the ASR: a user-supplied SRT can arrive in
+    # either script, and 选断 must match 選斷.
+    return "".join(ch.lower() for ch in to_simplified(text) if ch.isalnum())
+
+
+def _text_similarity(a: str, b: str) -> float:
+    """Containment of character bigrams, so a repeated line is caught whether
+    it fills a short window or is padded with more speech in a long one.
+    Bigrams rather than words: Chinese carries no word separators."""
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+
+    def bigrams(text: str) -> set:
+        return {text[i:i + 2] for i in range(len(text) - 1)} or {text}
+
+    ga, gb = bigrams(a), bigrams(b)
+    return len(ga & gb) / min(len(ga), len(gb))
+
+
+def _duplicates(candidate: Dict[str, Any], selected: Iterable[Dict[str, Any]]) -> bool:
+    """Non-overlapping windows can still carry the same words: a repeated
+    slogan or sponsor read, or Whisper looping one phrase over silence.
+    Windows without text (audiovisual fallback) never count as duplicates."""
+    text = _normalized_text(candidate.get("text"))
+    if not text:
+        return False
+    return any(
+        _text_similarity(text, _normalized_text(item.get("text"))) >= DUPLICATE_TEXT_SIMILARITY
+        for item in selected
+    )
+
+
 def _pick_best(
     candidates: Iterable[Dict[str, Any]],
     selected: List[Dict[str, Any]],
@@ -264,13 +306,28 @@ def _select_segments(
     include_conclusion: bool,
     total_budget: Optional[float] = None,
     section_min_score: float = 0.35,
+    skipped_duplicates: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     selected: List[Dict[str, Any]] = []
 
     def eligible(items):
         used = sum(item["end_time"] - item["start_time"] for item in selected)
-        return [item for item in items if not _overlaps(item, selected)
-                and (total_budget is None or used + item["end_time"] - item["start_time"] <= total_budget + 0.001)]
+        kept = []
+        for item in items:
+            if _overlaps(item, selected):
+                continue
+            if total_budget is not None and used + item["end_time"] - item["start_time"] > total_budget + 0.001:
+                continue
+            if _duplicates(item, selected):
+                # Record the rejection so a wrong similarity call is visible
+                # in the result rather than silently costing a segment.
+                if skipped_duplicates is not None and not any(
+                    item is skipped for skipped in skipped_duplicates
+                ):
+                    skipped_duplicates.append(item)
+                continue
+            kept.append(item)
+        return kept
 
     if include_intro and len(selected) < count:
         intro_candidates = eligible([
@@ -469,6 +526,7 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
         video_duration, window_duration, options.get("topic", ""), transcript, analysis, weights,
         maximum_duration=min(30.0, desired_total),
     )
+    skipped_duplicates: List[Dict[str, Any]] = []
     selected = _select_segments(
         candidates,
         video_duration,
@@ -477,6 +535,7 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
         bool(options.get("include_highlights", True)),
         conclusion,
         total_budget=desired_total,
+        skipped_duplicates=skipped_duplicates,
     )
     if not selected:
         raise ValueError("未找到符合时长与完整语句边界的可用片段，或所选评分维度没有有效测量；请调整时长或权重")
@@ -484,6 +543,9 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
     warnings = []
     if len(selected) < count:
         warnings.append(f"在完整语句、不重叠和总时长约束下仅选出 {len(selected)}/{count} 段")
+    if skipped_duplicates:
+        spots = "、".join(f"{item['start_time']:.1f}s" for item in skipped_duplicates[:5])
+        warnings.append(f"跳过 {len(skipped_duplicates)} 个与已选片段文本重复的候选（{spots}）")
     if analysis.get("degraded"):
         warnings.append("部分视听测量不可用；缺失维度已排除并重新归一化权重")
     if transcription_meta.get("source") == "unavailable":

@@ -9,6 +9,7 @@ import time
 import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
+from core.chinese import to_simplified
 from core.concurrency import run_ffmpeg
 from core.runtime import MODEL_DIR, OUTPUT_DIR
 from core.utterances import resegment
@@ -334,27 +335,35 @@ class WhisperASRService:
         }
         
         full_text_parts = []
-        
+
+        # The 简体 prompt only steers the first window; later windows can
+        # drift into Traditional and stay there. Normalise the text (and the
+        # words, which resegment() joins back into utterances) so the SRT and
+        # the duplicate check see one script throughout.
+        chinese = bool(info.language and str(info.language).lower().startswith("zh"))
+        script = to_simplified if chinese else (lambda value: value)
+
         for segment in segments:
+            segment_text = script(segment.text.strip())
             segment_data = {
                 'id': segment.id,
                 'seek': segment.seek,
                 'start': segment.start,
                 'end': segment.end,
-                'text': segment.text.strip(),
+                'text': segment_text,
                 'tokens': segment.tokens,
                 'temperature': segment.temperature,
                 'avg_logprob': segment.avg_logprob,
                 'compression_ratio': segment.compression_ratio,
                 'no_speech_prob': segment.no_speech_prob,
                 'words': [
-                    {'word': word.word, 'start': word.start, 'end': word.end}
+                    {'word': script(word.word), 'start': word.start, 'end': word.end}
                     for word in (getattr(segment, 'words', None) or [])
                 ],
             }
 
             result['segments'].append(segment_data)
-            full_text_parts.append(segment.text.strip())
+            full_text_parts.append(segment_text)
 
         result['full_text'] = ' '.join(full_text_parts)
 

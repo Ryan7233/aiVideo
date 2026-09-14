@@ -21,7 +21,8 @@
 
 1. `POST /upload/video` 上传，或直接给平台链接（Bilibili / YouTube 等经 yt-dlp 解析；
    直链 `.mp4` 走带大小上限的下载器）。
-2. Faster-Whisper 转写。中文默认输出简体，并按**词级时间戳重新分句**——Whisper 自己的
+2. Faster-Whisper 转写。中文统一输出简体（引导词只管第一个解码窗口，长录音中途会漂成繁体，
+   所以转写后再用 OpenCC 归一），并按**词级时间戳重新分句**——Whisper 自己的
    分段跟着解码窗口走，连续口播经常整段几十秒返回，那样每个候选窗口拿到的文本都一样，
    语义评分就失去区分度。
 3. 每 300 秒一块覆盖全片；每块一次 FFmpeg 解码同时采集场景变化、运动幅度（signalstats YDIF）和音频 RMS。
@@ -31,6 +32,8 @@
    分数不低于 0.35 的片段。该阈值是工程初始值，尚未经人工素材集校准。
    不截断转写语句来凑时长；遵守总时长与不重叠约束，段数不足时返回 `warnings`。
    显式传入旧的 `include_intro/include_conclusion` 参数仍可覆盖模式默认值。
+   时间不重叠但文字重复的候选（重复的口号、赞助词，或 Whisper 在静音上循环的一句）只选一次；
+   被跳过的候选会列在 `warnings` 里，判定阈值同样未经校准。
    单片段最长 30 秒，短于 5 秒的转写语句会尝试与邻句组合；不可组合时提示调整时长。
 6. SRT 使用选中片段内每句的原始时间戳重新计时，保留全文；预览文本可截断，但导出不会截断。
    测量失败区间会在 `analysis.measurement` 中报告；窗口缺失的评分维度被排除，剩余权重重新归一化。
@@ -98,6 +101,7 @@ core/evaluation.py          结构检查与人工标注区间评估
 core/edl.py                 剪辑清单（Markdown / EDL / SRT）
 core/whisper_asr.py         Faster-Whisper 转写
 core/utterances.py          按词级时间戳重新分句
+core/chinese.py             转写文本繁转简
 core/smart_clipping.py      分块覆盖全片，采集画面 / 运动 / 音频
 core/semantic_scoring.py    候选片段打分（LLM 优先，词典规则兜底）
 core/semantic_analysis.py   中文语义评分

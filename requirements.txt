@@ -31,6 +31,9 @@ yt-dlp>=2024.12.6,<2027.0.0
 # utterance re-segmentation in core/utterances.py.
 faster-whisper>=1.0.1,<2.0.0
 jieba>=0.42.1,<1.0.0
+# Whisper drifts into Traditional part-way through long Mandarin recordings;
+# core/chinese.py converts the transcript back. Pure Python, Apache-2.0.
+opencc-python-reimplemented>=0.1.7,<0.2.0
 
 # Pillow, numpy, scikit-learn, librosa, soundfile and scipy went with the
 # cover, collage and photo-ranking features. Nothing left imports them.
