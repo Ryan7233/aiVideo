@@ -12,7 +12,7 @@ import re
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from core.chinese import to_simplified
 from core.concurrency import run_ffmpeg
@@ -20,6 +20,7 @@ from core.candidates import build_windows
 from core.edl import to_edl, to_markdown, to_srt
 from core.config import MAX_FILE_SIZE
 from core.runtime import (
+    DATA_ROOT,
     OUTPUT_DIR,
     materialize_video_source,
     resolve_media_path,
@@ -474,8 +475,32 @@ def _write_decision_list(
     return written, failures
 
 
-def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
-    """Run the complete measured/semantic multi-segment workflow."""
+def _data_relative(path: Path) -> Optional[str]:
+    """``input_data/...`` or ``output_data/...`` when the file sits under the
+    data root, so the UI can play the source back; None for anything else."""
+    try:
+        return path.resolve().relative_to(DATA_ROOT).as_posix()
+    except ValueError:
+        return None
+
+
+def process_multi_segment_video(
+    options: Dict[str, Any],
+    report: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+    """Run the complete measured/semantic multi-segment workflow.
+
+    ``report`` receives a phase key as each phase starts (materializing,
+    transcribing, measuring, scoring, rendering, exporting) so a job
+    record can show more than "running" for the minutes ASR takes.
+    """
+    def phase(name: str) -> None:
+        if report is not None:
+            try:
+                report(name)
+            except Exception:  # progress is advisory; never fail the job for it
+                logger.debug("progress callback failed at %s", name, exc_info=True)
+
     mode = options.get("selection_mode", "highlights")
     if mode not in {"highlights", "summary"}:
         raise ValueError("selection_mode 必须是 highlights 或 summary")
@@ -490,6 +515,7 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
     # direct .mp4 and a platform link all have to work from every caller --
     # the sync route, the job handler and the batch script alike. Doing it in
     # one of them left the others rejecting URLs outright.
+    phase("materializing")
     video_path = materialize_video_source(
         str(options["video_path"]), "clip", MAX_FILE_SIZE
     )
@@ -507,6 +533,7 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
     if window_duration * count > desired_total:
         window_duration = max(5.0, desired_total / count)
 
+    phase("transcribing")
     transcript, transcription_meta = _load_transcript(
         video_path,
         options.get("subtitle_path"),
@@ -514,6 +541,7 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
         options.get("asr_model_size", "base"),
         options.get("asr_language"),
     )
+    phase("measuring")
     analysis = SmartClippingEngine().analyze_video_content(
         str(video_path), max_duration=None
     )
@@ -522,6 +550,7 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
         "visual": float(options.get("visual_weight", 0.3)),
         "audio": float(options.get("audio_weight", 0.3)),
     }
+    phase("scoring")
     candidates = _build_candidates(
         video_duration, window_duration, options.get("topic", ""), transcript, analysis, weights,
         maximum_duration=min(30.0, desired_total),
@@ -555,6 +584,7 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
     stem = uuid.uuid4().hex
     output_path = OUTPUT_DIR / f"multi_clip_{stem}.mp4"
     if render:
+        phase("rendering")
         _combine_segments(video_path, selected, output_path)
 
     for segment in selected:
@@ -567,6 +597,7 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
     # The decision list is an output in its own right, not a by-product: the
     # judgement about which moments matter is the part a dedicated editor
     # cannot do for you, and it is useful even when nothing is rendered.
+    phase("exporting")
     decisions, decision_errors = _write_decision_list(
         stem, selected, str(video_path), options.get("topic", ""), _probe_fps(video_path)
     )
@@ -574,6 +605,7 @@ def process_multi_segment_video(options: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "status": "success",
         "output_video": f"output_data/{output_path.name}" if render else None,
+        "source_video": _data_relative(video_path),
         "rendered": render,
         "decision_list": decisions,
         "decision_list_errors": decision_errors,

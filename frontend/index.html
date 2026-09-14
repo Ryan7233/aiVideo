@@ -9,22 +9,25 @@
 <body>
 
 <header class="top">
-  <div class="wrap">
+  <div class="brand">
     <h1>aiVideo</h1>
-    <p>把一段长视频压成一份剪辑清单：哪几段值得剪，为什么，时间码多少。</p>
-    <div class="auth hidden" id="auth">
-      <label for="api-key">这个服务需要 API Key</label>
-      <input type="password" id="api-key" placeholder="AIVIDEO_API_KEY" autocomplete="off">
-      <button id="api-key-save" type="button">保存</button>
-      <span class="auth-note" id="auth-note">存在本浏览器，随请求发送</span>
-    </div>
+    <span class="tagline">长视频 → 剪辑清单：哪几段值得剪，为什么，时间码多少</span>
+  </div>
+  <div class="auth hidden" id="auth">
+    <label for="api-key">API Key</label>
+    <input type="password" id="api-key" placeholder="AIVIDEO_API_KEY" autocomplete="off">
+    <button id="api-key-save" type="button">保存</button>
+    <span class="auth-note" id="auth-note">存在本浏览器，随请求发送</span>
   </div>
 </header>
 
-<main class="wrap">
+<div class="layout">
+
+<!-- ── left: new task + history ─────────────────────────── -->
+<aside class="side">
 
   <section class="panel">
-    <h2>1 · 素材</h2>
+    <h2>新任务</h2>
 
     <div class="tabs" role="tablist">
       <button class="tab active" data-source="file" role="tab" aria-selected="true">上传文件</button>
@@ -41,37 +44,45 @@
 
     <div class="source hidden" id="source-url">
       <input type="url" id="video-url" placeholder="https://www.bilibili.com/video/… 或直链 .mp4">
-      <p class="hint">平台链接经 yt-dlp 解析；直链走带大小上限的下载器。仅限公网地址。</p>
+      <p class="hint">经 yt-dlp 解析；直链走带大小上限的下载器。仅限公网地址。</p>
     </div>
-  </section>
 
-  <section class="panel">
-    <h2>2 · 怎么选</h2>
+    <label class="field">
+      <span>主题</span>
+      <input type="text" id="topic" placeholder="例如：小红书运营" autocomplete="off">
+      <small>用来判断片段是否切题；也是历史列表里的名字</small>
+    </label>
 
-    <div class="grid">
-      <label class="field">
-        <span>选段模式</span>
-        <select id="selection-mode">
-          <option value="highlights" selected>精彩片段 · 优先选高分内容</option>
-          <option value="summary">结构化摘要 · 优先覆盖开场和结尾</option>
-        </select>
-        <small>摘要模式也会跳过低分首尾；沿语句边界切分，实际段数可能少于目标</small>
-      </label>
-      <label class="field">
-        <span>主题</span>
-        <input type="text" id="topic" placeholder="例如：小红书运营">
-        <small>用来判断片段是否切题</small>
-      </label>
-
+    <div class="row2">
       <label class="field">
         <span>片段数</span>
         <input type="number" id="segments" value="3" min="1" max="10">
       </label>
-
       <label class="field">
         <span>总时长（秒）</span>
         <input type="number" id="duration" value="60" min="5" max="300">
       </label>
+    </div>
+
+    <label class="field">
+      <span>选段模式</span>
+      <select id="selection-mode">
+        <option value="highlights" selected>精彩片段 · 优先选高分内容</option>
+        <option value="summary">结构化摘要 · 优先覆盖开场和结尾</option>
+      </select>
+    </label>
+
+    <details class="advanced">
+      <summary>高级</summary>
+
+      <div class="weights">
+        <label class="weight"><span>语义 <b id="w-sem-v">0.5</b></span>
+          <input type="range" id="w-sem" min="0" max="1" step="0.1" value="0.5"></label>
+        <label class="weight"><span>画面 <b id="w-vis-v">0.2</b></span>
+          <input type="range" id="w-vis" min="0" max="1" step="0.1" value="0.2"></label>
+        <label class="weight"><span>音频 <b id="w-aud-v">0.3</b></span>
+          <input type="range" id="w-aud" min="0" max="1" step="0.1" value="0.3"></label>
+      </div>
 
       <label class="field">
         <span>ASR 模型</span>
@@ -81,46 +92,100 @@
           <option value="small">small · 更准</option>
         </select>
       </label>
-    </div>
 
-    <div class="weights">
-      <span class="weights-label">权重</span>
-      <label class="weight"><span>语义 <b id="w-sem-v">0.5</b></span>
-        <input type="range" id="w-sem" min="0" max="1" step="0.1" value="0.5"></label>
-      <label class="weight"><span>画面 <b id="w-vis-v">0.2</b></span>
-        <input type="range" id="w-vis" min="0" max="1" step="0.1" value="0.2"></label>
-      <label class="weight"><span>音频 <b id="w-aud-v">0.3</b></span>
-        <input type="range" id="w-aud" min="0" max="1" step="0.1" value="0.3"></label>
-    </div>
-
-    <div class="toggles">
-      <label class="check"><input type="checkbox" id="use-asr" checked> 语音识别（关掉则只按画面和音频选）</label>
+      <label class="check"><input type="checkbox" id="use-asr" checked> 语音识别<small>关掉则只按画面和音频选</small></label>
       <label class="check"><input type="checkbox" id="render"> 同时渲染 9:16 成片<small>清单几秒出，成片要等转码</small></label>
-    </div>
+    </details>
+
+    <button id="run" class="primary block">生成剪辑清单</button>
   </section>
 
-  <div class="actions">
-    <button id="run" class="primary">生成剪辑清单</button>
-    <span id="status" class="status" role="status" aria-live="polite"></span>
+  <section class="panel history">
+    <h2>历史 <button class="ghost" id="history-refresh" type="button" title="刷新">↻</button></h2>
+    <ul class="jobs" id="jobs"><li class="empty">还没有任务</li></ul>
+  </section>
+
+</aside>
+
+<!-- ── right: workspace ─────────────────────────────────── -->
+<main class="work">
+
+  <div class="stage" id="stage-empty">
+    <div class="empty-state">
+      <h3>左边放一条视频，右边出一份清单</h3>
+      <p>清单包含每段的起止时间码、评分和理由，可导出 Markdown、EDL（导入剪辑软件）和 SRT。<br>
+         点任意片段会在播放器里定位；勾掉不要的、手动补上漏选的，再导出标注，用于之后校准。</p>
+    </div>
   </div>
 
-  <section class="panel result hidden" id="result">
-    <h2>3 · 清单</h2>
-    <div class="summary" id="summary"></div>
-    <div class="scroll">
-      <table id="clips">
-        <thead><tr>
-          <th>#</th><th>起</th><th>止</th><th>时长</th>
-          <th>总分</th><th>语义</th><th>画面</th><th>音频</th><th>理由 / 内容</th>
-        </tr></thead>
-        <tbody></tbody>
-      </table>
+  <div class="stage hidden" id="stage-running">
+    <div class="running">
+      <div class="spinner"></div>
+      <div>
+        <b id="running-step">已提交</b>
+        <span class="mono" id="running-elapsed">0s</span>
+        <p class="hint" id="running-note">语音转写是最久的一步，几分钟的视频通常 10–60 秒。</p>
+      </div>
+      <button class="ghost" id="cancel" type="button">取消</button>
     </div>
-    <div class="downloads" id="downloads"></div>
-    <video id="preview" class="hidden" controls playsinline></video>
-  </section>
+  </div>
 
+  <div class="stage hidden" id="stage-error">
+    <div class="errbox"><b>失败</b><span id="error-text"></span></div>
+  </div>
+
+  <div class="stage hidden" id="stage-result">
+
+    <div class="result-head">
+      <div>
+        <h2 id="result-title">剪辑清单</h2>
+        <span class="mono muted" id="result-meta"></span>
+      </div>
+      <div class="exports" id="downloads"></div>
+    </div>
+
+    <div class="player-wrap" id="player-wrap">
+      <video id="player" controls playsinline preload="metadata"></video>
+      <p class="hint hidden" id="player-note"></p>
+    </div>
+
+    <div class="timeline" id="timeline" title="点击定位">
+      <div class="tl-measured" id="tl-measured"></div>
+      <div class="tl-blocks" id="tl-blocks"></div>
+      <div class="tl-playhead" id="tl-playhead"></div>
+    </div>
+    <div class="tl-legend">
+      <span><i class="sw intro"></i>开场</span>
+      <span><i class="sw highlight"></i>精彩</span>
+      <span><i class="sw conclusion"></i>结尾</span>
+      <span><i class="sw manual"></i>手动</span>
+      <span><i class="sw unmeasured"></i>未测量</span>
+    </div>
+
+    <div class="summary" id="summary"></div>
+    <div class="notes" id="notes"></div>
+
+    <div class="mark">
+      <span class="muted">手动补一段：</span>
+      <button class="ghost" id="mark-in" type="button" title="快捷键 I">起点 <b class="mono" id="mark-in-v">—</b></button>
+      <button class="ghost" id="mark-out" type="button" title="快捷键 O">终点 <b class="mono" id="mark-out-v">—</b></button>
+      <button class="ghost" id="mark-add" type="button" disabled>添加</button>
+      <span class="hint">播放到位置按 I / O，或点按钮。这些区间会进入标注导出。</span>
+    </div>
+
+    <ol class="segments" id="segment-list"></ol>
+
+    <div class="review">
+      <span id="review-count" class="muted"></span>
+      <button class="ghost" id="export-labels" type="button">导出标注 JSON</button>
+      <button class="ghost" id="copy-md" type="button">复制 Markdown</button>
+      <span class="hint">标注 = 勾选的建议片段 + 手动区间，喂给 <code>scripts/evaluate_clipping.py --annotations</code></span>
+    </div>
+
+  </div>
 </main>
+
+</div>
 
 <script src="/static/app.js"></script>
 </body>

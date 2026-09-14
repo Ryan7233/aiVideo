@@ -75,6 +75,15 @@ async def create_job(submission: JobSubmission) -> Dict[str, Any]:
     }
 
 
+def _job_label(params: Dict[str, Any]) -> str:
+    """Something a person can recognise a job by: its topic, else the file."""
+    topic = str(params.get("topic") or "").strip()
+    if topic:
+        return topic
+    source = str(params.get("video_path") or "").strip()
+    return source.rstrip("/").rsplit("/", 1)[-1] if source else ""
+
+
 @router.get("")
 async def list_jobs(
     limit: int = Query(50, ge=1, le=200),
@@ -84,11 +93,12 @@ async def list_jobs(
     """Recent jobs, newest first."""
     jobs = job_store.list_jobs(limit=limit, kind=kind, status=status)
     # Keep the listing light; params and results can be large.
-    summaries = [
-        {key: job[key] for key in
-         ("id", "kind", "status", "created_at", "started_at", "finished_at", "progress")}
-        for job in jobs
-    ]
+    summaries = []
+    for job in jobs:
+        summary = {key: job[key] for key in
+                   ("id", "kind", "status", "created_at", "started_at", "finished_at", "progress")}
+        summary["label"] = _job_label(job.get("params") or {})
+        summaries.append(summary)
     return {"jobs": summaries}
 
 

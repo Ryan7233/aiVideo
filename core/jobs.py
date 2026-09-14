@@ -147,8 +147,11 @@ def shutdown(wait: bool = False) -> None:
 def _multi_segment_handler(params: Dict[str, Any], job_id: str) -> Dict[str, Any]:
     from core.video_workflow import process_multi_segment_video
 
-    job_store.set_progress(job_id, {"step": "clipping"})
-    return process_multi_segment_video(params)
+    def report(step: str) -> None:
+        job_store.set_progress(job_id, {"step": step})
+
+    report("queued")
+    return process_multi_segment_video(params, report=report)
 
 
 register_job_handler("multi_segment_clipping", _multi_segment_handler)

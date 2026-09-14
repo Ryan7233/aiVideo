@@ -28,6 +28,7 @@ from core.config import (
     validate_video_extension,
 )
 from core.runtime import (
+    INPUT_DIR,
     LOG_DIR,
     OUTPUT_DIR,
     PROJECT_ROOT,
@@ -146,6 +147,10 @@ app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "frontend")), name
 # knowing the mapping. /output stays for anything already using it.
 app.mount("/output_data", StaticFiles(directory=str(OUTPUT_DIR)), name="output_data")
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
+# The source itself, so the UI can play a job's video back next to its cut
+# list -- after a reload the browser no longer has the uploaded File. Same
+# API-key gate as the outputs; a swept file simply 404s.
+app.mount("/input_data", StaticFiles(directory=str(INPUT_DIR)), name="input_data")
 
 @app.post("/admin/retention/sweep", tags=["admin"])
 async def trigger_retention_sweep() -> Dict[str, Any]:
