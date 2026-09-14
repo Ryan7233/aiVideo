@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 import socket
 import uuid
 from pathlib import Path
@@ -11,7 +12,10 @@ from urllib.parse import unquote, urlparse
 
 import requests
 
-from core.env import env_bool, env_path
+from core.env import env_bool, env_int, env_path, env_str
+
+
+logger = logging.getLogger(__name__)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -78,6 +82,24 @@ def resolve_output_path(value: Optional[str], default_name: str, suffix: str = "
     return candidate
 
 
+def proxy_for(url: str) -> Optional[str]:
+    """The proxy that will actually carry this request, or None if the
+    connection is direct. Uses the same environment rules requests applies,
+    so NO_PROXY is honoured exactly as it will be at connection time."""
+    try:
+        return requests.utils.select_proxy(url, requests.utils.get_environ_proxies(url))
+    except Exception:  # pragma: no cover - proxy config is advisory here
+        logger.debug("无法判断 %s 的代理配置", url, exc_info=True)
+        return None
+
+
+def _literal_ip(host: str) -> Optional[ipaddress._BaseAddress]:
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
 def validate_remote_url(url: str) -> str:
     """Allow public HTTP(S) targets and reject loopback/private/link-local hosts."""
     parsed = urlparse(url.strip())
@@ -90,6 +112,27 @@ def validate_remote_url(url: str) -> str:
     if host == "localhost" or host.endswith(".localhost"):
         raise ValueError("不允许访问本机地址")
 
+    # A literal address names its destination outright, so it is checked
+    # whether or not a proxy is in the way: asking a proxy to fetch
+    # 169.254.169.254 is the same request as fetching it directly.
+    literal = _literal_ip(host)
+    if literal is not None:
+        if not literal.is_global:
+            raise ValueError("不允许访问内网、回环或保留地址")
+        return url.strip()
+
+    # A name behind a proxy is resolved by the proxy, not by this machine, so
+    # the local answer is not where the traffic goes. Proxies in "fake-ip"
+    # mode (Clash, Surge, ...) answer every name with a placeholder out of
+    # 198.18.0.0/15, which would reject every public site on the internet.
+    # Egress policy belongs to the proxy in that configuration; set
+    # URL_ADDRESS_CHECK=strict to resolve locally anyway.
+    if env_str("URL_ADDRESS_CHECK", "auto").lower() != "strict":
+        proxy = proxy_for(url.strip())
+        if proxy:
+            logger.debug("%s 经由代理 %s，地址过滤交给代理", host, proxy)
+            return url.strip()
+
     try:
         addresses = {item[4][0] for item in socket.getaddrinfo(host, parsed.port or 443)}
     except socket.gaierror as exc:
@@ -98,7 +141,10 @@ def validate_remote_url(url: str) -> str:
     for address in addresses:
         ip = ipaddress.ip_address(address)
         if not ip.is_global:
-            raise ValueError("不允许访问内网、回环或保留地址")
+            raise ValueError(
+                f"不允许访问内网、回环或保留地址（{host} 解析到 {address}）。"
+                "如果本机使用 fake-ip 模式的代理，请为服务配置 HTTP_PROXY/HTTPS_PROXY"
+            )
     return url.strip()
 
 
@@ -128,7 +174,19 @@ def _peer_address(response) -> Optional[str]:
     return None
 
 
-def assert_public_peer(response) -> None:
+def _proxy_addresses(proxy_url: str) -> set:
+    """Every address the configured proxy may answer on."""
+    host = urlparse(proxy_url).hostname or ""
+    literal = _literal_ip(host)
+    if literal is not None:
+        return {str(literal)}
+    try:
+        return {item[4][0] for item in socket.getaddrinfo(host, None)}
+    except socket.gaierror:
+        return set()
+
+
+def assert_public_peer(response, *, expect_proxy: Optional[str] = None) -> None:
     """Reject a connection that actually landed on a private address.
 
     validate_remote_url resolves the hostname, then requests resolves it again
@@ -142,6 +200,14 @@ def assert_public_peer(response) -> None:
             "无法确认远程连接的实际地址，出于安全考虑中止下载"
             "（urllib3 内部结构可能已变化）"
         )
+    if expect_proxy:
+        # Through a proxy the peer is the proxy itself -- usually loopback --
+        # so a public-address assertion would reject every proxied download.
+        # Confirm the connection landed on the configured proxy and let the
+        # proxy own where it goes from there.
+        if peer not in _proxy_addresses(expect_proxy):
+            raise ValueError(f"连接未落在配置的代理上: {peer}")
+        return
     if not ipaddress.ip_address(peer).is_global:
         raise ValueError(f"远程主机解析到非公网地址: {peer}")
 
@@ -154,7 +220,7 @@ def download_public_file(url: str, destination: Path, max_bytes: int) -> Path:
     for _ in range(6):
         response = requests.get(current, stream=True, timeout=(10, 120), allow_redirects=False)
         try:
-            assert_public_peer(response)
+            assert_public_peer(response, expect_proxy=proxy_for(current))
         except Exception:
             response.close()
             raise
@@ -222,16 +288,24 @@ def download_with_ytdlp(url: str, prefix: str, max_bytes: int) -> Path:
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
     stem = f"{prefix}_{uuid.uuid4().hex}"
 
+    # Nothing downstream reads pixels at full resolution: ASR uses the audio,
+    # and scene/motion/RMS measurement is unaffected by anything above 720p.
+    # Asking for the best format made a 15-minute video exceed the size cap --
+    # failing on exactly the long material this tool exists for.
+    height = env_int("YTDLP_MAX_HEIGHT", 720)
+
     def guard(status: dict) -> None:
         seen = status.get("downloaded_bytes") or 0
         declared = status.get("total_bytes") or status.get("total_bytes_estimate") or 0
         if seen > max_bytes or declared > max_bytes:
             raise DownloadTooLarge(
-                f"远程视频超过大小限制（{max_bytes // 1048576} MB）"
+                f"远程视频超过大小限制（{max_bytes // 1048576} MB，"
+                f"该片约 {max(seen, declared) // 1048576} MB）。"
+                f"可调低 YTDLP_MAX_HEIGHT（当前 {height}）或调高 MAX_FILE_SIZE"
             )
 
     options = {
-        "format": "bv*+ba/b",
+        "format": f"bv*[height<={height}]+ba/b[height<={height}]/bv*+ba/b",
         "merge_output_format": "mp4",
         "outtmpl": str(DOWNLOAD_DIR / f"{stem}.%(ext)s"),
         "quiet": True,

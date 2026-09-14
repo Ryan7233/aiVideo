@@ -142,7 +142,7 @@ function acceptFile(file) {
 });
 
 const FORM_STORAGE = 'aivideo.form';
-const FORM_FIELDS = ['topic', 'segments', 'duration', 'selection-mode', 'w-sem', 'w-vis', 'w-aud', 'asr-model', 'use-asr', 'render'];
+const FORM_FIELDS = ['topic', 'segments', 'duration', 'selection-mode', 'w-sem', 'w-vis', 'w-aud', 'asr-model', 'asr-language', 'use-asr', 'render'];
 
 function readForm() {
   const values = {};
@@ -185,6 +185,7 @@ function formFromParams(params) {
     'w-vis': params.visual_weight ?? 0.2,
     'w-aud': params.audio_weight ?? 0.3,
     'asr-model': params.asr_model_size || 'base',
+    'asr-language': params.asr_language || '',
     'use-asr': params.enable_content_analysis !== false,
     render: Boolean(params.render),
   });
@@ -236,6 +237,7 @@ async function run() {
       audio_weight: Number($('w-aud').value),
       enable_content_analysis: $('use-asr').checked,
       asr_model_size: $('asr-model').value,
+      asr_language: $('asr-language').value || null,
       render: $('render').checked,
     };
 

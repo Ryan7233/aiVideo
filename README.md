@@ -87,6 +87,8 @@ curl http://127.0.0.1:8000/jobs/<job_id>
 | `SEMANTIC_SCORING_MODE` | `auto` / `llm`（强制）/ `rules`（不调用 LLM） |
 | `MAX_CONCURRENT_MEDIA_JOBS` | 同时运行的 FFmpeg 进程数，默认 CPU 核数一半 |
 | `ASR_INITIAL_PROMPT` | 中文转写引导词，默认 `简体`（必须短，长提示会让分段变粗） |
+| `URL_ADDRESS_CHECK` | `auto`（默认，走代理时由代理解析域名）/ `strict`（始终本地解析） |
+| `YTDLP_MAX_HEIGHT` | 平台链接下载的最高分辨率，默认 `720` |
 | `OUTPUT_RETENTION_DAYS` 等 | 产物与任务记录保留天数，`0` 关闭该项 |
 
 完整列表见 `env.example`。空值等价于未配置。
@@ -130,6 +132,8 @@ node --check frontend/app.js
 
 - 语句边界来自 ASR 的标点、停顿与长度上限；边界对齐不等于语义上下文一定完整。
 - 结构化摘要的首尾约束与贪心选择不保证全局最优；请根据人工复核调整模式与权重。
+- 语音语言默认自动检测，只听开头 30 秒。中英混说的素材容易判错，判错时整段转写会变成音译
+  乱码、候选分数挤在一起；在界面「高级 → 语音语言」里指定语言即可。
 - 没有发布能力，流程止于导出。
 - 语义评分未配置 LLM 时是词典法，模型是否改善真实选段需要人工标注验证。
 - 并发闸门是进程内信号量。多个 Celery worker 时实际上限是 worker 进程数 × 该值。

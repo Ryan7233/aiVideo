@@ -144,3 +144,24 @@ def test_the_page_has_no_duplicate_element_ids():
     ids = re.findall(r'\bid="([^"]+)"', Path("frontend/index.html").read_text(encoding="utf-8"))
     duplicates = [name for name, count in collections.Counter(ids).items() if count > 1]
     assert not duplicates, duplicates
+
+
+class TestLanguageIsSelectable:
+    """Detection listens to the opening 30 s only. On a Mandarin video that
+    starts in English it returned "en", and the whole transcript came back as
+    romanised nonsense -- every candidate then scored within 0.02 of the next.
+    The API always took asr_language; the page did not offer it."""
+
+    def test_the_page_offers_it_and_sends_it(self):
+        page = Path("frontend/index.html").read_text(encoding="utf-8")
+        assert 'id="asr-language"' in page
+        assert 'value="zh"' in page
+        assert 'value="" selected' in page, "auto-detect stays the default"
+        assert "asr_language" in Path("frontend/app.js").read_text(encoding="utf-8")
+
+    def test_the_request_model_passes_it_through(self, source_file):
+        from api.main import MultiSegmentClippingReq
+
+        assert MultiSegmentClippingReq.model_fields["asr_language"].default is None
+        req = MultiSegmentClippingReq(video_path=str(source_file), topic="t", asr_language="zh")
+        assert req.asr_language == "zh"

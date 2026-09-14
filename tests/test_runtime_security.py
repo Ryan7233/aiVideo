@@ -110,3 +110,100 @@ class TestPeerVerification:
 
         with pytest.raises(ValueError, match="无法确认"):
             assert_public_peer(Opaque())
+
+
+class TestProxiedHosts:
+    """A proxy in "fake-ip" mode (Clash, Surge) answers every DNS query with a
+    placeholder out of 198.18.0.0/15. Resolving locally then rejected every
+    public site -- youtu.be included -- because the placeholder is reserved.
+    Behind a proxy the name is resolved by the proxy, so the local answer says
+    nothing about where the traffic goes."""
+
+    FAKE_IP = "198.18.0.209"
+
+    @pytest.fixture
+    def fake_ip_dns(self, monkeypatch):
+        from core import runtime
+
+        monkeypatch.setattr(runtime.socket, "getaddrinfo",
+                            lambda host, port, *a, **k: [(2, 1, 6, "", (self.FAKE_IP, port or 443))])
+
+    def test_a_public_name_is_rejected_without_a_proxy(self, fake_ip_dns, monkeypatch):
+        from core import runtime
+
+        monkeypatch.setattr(runtime, "proxy_for", lambda url: None)
+        with pytest.raises(ValueError, match="198.18.0.209"):
+            runtime.validate_remote_url("https://youtu.be/abc")
+
+    def test_but_passes_when_a_proxy_carries_it(self, fake_ip_dns, monkeypatch):
+        from core import runtime
+
+        monkeypatch.setattr(runtime, "proxy_for", lambda url: "http://127.0.0.1:1082")
+        assert runtime.validate_remote_url("https://youtu.be/abc") == "https://youtu.be/abc"
+
+    def test_strict_mode_resolves_locally_regardless(self, fake_ip_dns, monkeypatch):
+        from core import runtime
+
+        monkeypatch.setattr(runtime, "proxy_for", lambda url: "http://127.0.0.1:1082")
+        monkeypatch.setenv("URL_ADDRESS_CHECK", "strict")
+        with pytest.raises(ValueError, match="不允许访问"):
+            runtime.validate_remote_url("https://youtu.be/abc")
+
+    @pytest.mark.parametrize("url", [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.5/internal",
+        "http://127.0.0.1:8000/admin",
+        "http://[::1]/admin",
+    ])
+    def test_a_literal_address_is_rejected_even_behind_a_proxy(self, url, monkeypatch):
+        """Asking a proxy to fetch the metadata service is the same request as
+        fetching it directly, so a literal address never gets the exemption."""
+        from core import runtime
+
+        monkeypatch.setattr(runtime, "proxy_for", lambda u: "http://127.0.0.1:1082")
+        with pytest.raises(ValueError):
+            runtime.validate_remote_url(url)
+
+    def test_no_proxy_hosts_are_still_resolved(self, monkeypatch):
+        """proxy_for must honour NO_PROXY, or an excluded host would skip the
+        check while actually connecting directly."""
+        from core import runtime
+
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1082")
+        monkeypatch.setenv("NO_PROXY", "internal.example")
+        assert runtime.proxy_for("http://internal.example/x") is None
+        assert runtime.proxy_for("http://elsewhere.example/x") == "http://127.0.0.1:1082"
+
+
+class TestProxiedPeer:
+    """Through a proxy the peer is the proxy, normally loopback; asserting a
+    public peer rejected every proxied download."""
+
+    def test_the_configured_proxy_is_accepted(self):
+        from core.runtime import assert_public_peer
+
+        class Response:
+            class raw:
+                class _connection:
+                    class sock:
+                        @staticmethod
+                        def getpeername():
+                            return ("127.0.0.1", 1082)
+
+        Response.raw._connection.sock = Response.raw._connection.sock()
+        assert_public_peer(Response(), expect_proxy="http://127.0.0.1:1082")
+
+    def test_another_address_is_not(self):
+        from core.runtime import assert_public_peer
+
+        class Response:
+            class raw:
+                class _connection:
+                    class sock:
+                        @staticmethod
+                        def getpeername():
+                            return ("10.0.0.5", 1082)
+
+        Response.raw._connection.sock = Response.raw._connection.sock()
+        with pytest.raises(ValueError, match="未落在配置的代理"):
+            assert_public_peer(Response(), expect_proxy="http://127.0.0.1:1082")
