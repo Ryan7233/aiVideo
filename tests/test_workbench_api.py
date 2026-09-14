@@ -165,3 +165,69 @@ class TestLanguageIsSelectable:
         assert MultiSegmentClippingReq.model_fields["asr_language"].default is None
         req = MultiSegmentClippingReq(video_path=str(source_file), topic="t", asr_language="zh")
         assert req.asr_language == "zh"
+
+
+class TestEvaluateFromThePage:
+    """The page exported a labels file and told the reviewer to run a CLI with
+    it -- but never said where the file went, and nothing in the UI consumed
+    one. The loop was open at the handoff; this endpoint closes it."""
+
+    @pytest.fixture
+    def finished_job(self):
+        job_id = job_store.create_job("multi_segment_clipping", {"topic": "校准"})
+        job_store.mark_running(job_id)
+        job_store.mark_succeeded(job_id, {"selected_segments": [
+            {"start_time": 10, "end_time": 20, "text": "第一段", "cues": []},
+            {"start_time": 40, "end_time": 50, "text": "第二段", "cues": []},
+        ]})
+        yield job_id
+        with job_store._connect() as connection:
+            connection.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+    def test_a_disagreement_produces_real_numbers(self, finished_job):
+        client = TestClient(app)
+        # Keeps the first suggestion, rejects the second, adds a missed span.
+        body = client.post("/evaluate/selection", json={
+            "job_id": finished_job,
+            "accepted": [{"start_time": 10, "end_time": 20}, {"start_time": 70, "end_time": 80}],
+        }).json()
+        human = body["evaluation"]["human_metrics"]
+        assert human["matched_count"] == 1
+        assert human["precision_at_returned_k"] == 0.5
+        assert human["approved_moment_recall"] == 0.5
+        assert body["trivial"] is False
+
+    def test_accepting_everything_is_flagged_as_meaningless(self, finished_job):
+        """Labels identical to the output score 1.0 by construction."""
+        client = TestClient(app)
+        body = client.post("/evaluate/selection", json={
+            "job_id": finished_job,
+            "accepted": [{"start_time": 10, "end_time": 20}, {"start_time": 40, "end_time": 50}],
+        }).json()
+        assert body["evaluation"]["human_metrics"]["precision_at_returned_k"] == 1.0
+        assert body["trivial"] is True
+
+    def test_bad_spans_are_rejected(self, finished_job):
+        client = TestClient(app)
+        assert client.post("/evaluate/selection", json={
+            "job_id": finished_job, "accepted": [{"start_time": 30, "end_time": 20}],
+        }).status_code == 422
+
+    def test_an_unfinished_or_missing_job_is_refused(self):
+        client = TestClient(app)
+        assert client.post("/evaluate/selection", json={
+            "job_id": "nope", "accepted": []}).status_code == 404
+        pending = job_store.create_job("multi_segment_clipping", {})
+        try:
+            assert client.post("/evaluate/selection", json={
+                "job_id": pending, "accepted": []}).status_code == 409
+        finally:
+            with job_store._connect() as connection:
+                connection.execute("DELETE FROM jobs WHERE id = ?", (pending,))
+
+    def test_the_page_calls_it_and_shows_the_caveat(self):
+        page = Path("frontend/index.html").read_text(encoding="utf-8")
+        source = Path("frontend/app.js").read_text(encoding="utf-8")
+        assert 'id="evaluate"' in page and 'id="scorecard"' in page
+        assert "/evaluate/selection" in source
+        assert "trivial" in source, "a 100% score from unchanged labels must be labelled as such"

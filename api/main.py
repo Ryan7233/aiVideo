@@ -39,6 +39,8 @@ from core.runtime import (
     resolve_output_path,
     validate_remote_url,
 )
+from core.evaluation import evaluate_selection
+from core import job_store
 from core.smart_clipping import get_smart_segments, analyze_video_intelligence
 from core.whisper_asr import get_asr_service
 from core.semantic_analysis import get_semantic_analyzer
@@ -828,6 +830,62 @@ async def multi_segment_intelligent_clipping(req: MultiSegmentClippingReq):
 
 
 # 文件上传相关API
+
+class SelectionReviewReq(BaseModel):
+    """A reviewer's verdict on one job's segments."""
+
+    job_id: str
+    accepted: List[Dict[str, float]]
+
+    @field_validator("accepted")
+    @classmethod
+    def validate_spans(cls, spans):
+        for span in spans:
+            if "start_time" not in span or "end_time" not in span:
+                raise ValueError("每个区间需要 start_time 和 end_time")
+            if not 0 <= float(span["start_time"]) < float(span["end_time"]):
+                raise ValueError("标注必须满足 0 <= start_time < end_time")
+        return spans
+
+
+@app.post("/evaluate/selection", tags=["video"])
+async def evaluate_selection_endpoint(req: SelectionReviewReq) -> Dict[str, Any]:
+    """Score a finished job's segments against what the reviewer accepted.
+
+    The page already holds the verdict, so making the reviewer save a file and
+    hand it to a CLI just to see two numbers broke the loop at the handoff.
+    This reads the segments from the job record rather than trusting the
+    client to resend them, so the metrics describe what was really produced.
+    """
+    job = job_store.get_job(req.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {req.job_id}")
+    if job["status"] != job_store.SUCCEEDED:
+        raise HTTPException(status_code=409, detail="只能评估已成功的任务")
+
+    segments = ((job.get("result") or {}).get("selected_segments")) or []
+    try:
+        report = evaluate_selection(segments, req.accepted)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    # All suggestions kept and nothing added means the labels are a copy of
+    # the output, and one-to-one IoU matching then returns 1.0 by
+    # construction. Say so rather than reporting a perfect score.
+    suggested = len(segments)
+    trivial = len(req.accepted) == suggested and all(
+        any(abs(float(a["start_time"]) - float(s["start_time"])) < 0.01
+            and abs(float(a["end_time"]) - float(s["end_time"])) < 0.01
+            for a in req.accepted)
+        for s in segments
+    )
+    return {
+        "job_id": req.job_id,
+        "topic": (job.get("params") or {}).get("topic", ""),
+        "evaluation": report,
+        "trivial": trivial,
+    }
+
 
 @app.post("/upload/video", tags=["upload"])
 async def upload_video(file: UploadFile = File(...)):

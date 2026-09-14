@@ -547,14 +547,60 @@ $('copy-md').addEventListener('click', async () => {
   }
 });
 
-$('export-labels').addEventListener('click', () => {
-  if (!state.job) return;
+/** What the reviewer says belongs in the cut: the suggestions still ticked
+    plus the spans they marked by hand. */
+function acceptedSpans() {
   const segments = state.job.result.selected_segments || [];
-  const accepted = [
+  return [
     ...segments.filter((_, index) => state.accepted.has(index)),
     ...state.manual,
   ].map((span) => ({ start_time: round3(span.start_time), end_time: round3(span.end_time) }))
     .sort((a, b) => a.start_time - b.start_time);
+}
+
+$('evaluate').addEventListener('click', async () => {
+  if (!state.job) return;
+  const button = $('evaluate');
+  button.disabled = true;
+  try {
+    const response = await request('/evaluate/selection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: state.job.id, accepted: acceptedSpans() }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(detailOf(body) || `评估失败 (${response.status})`);
+    renderScorecard(body);
+  } catch (error) {
+    showToast(error.message || '评估失败');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+function renderScorecard({ evaluation, trivial }) {
+  const human = evaluation.human_metrics || {};
+  const pct = (value) => (value === null || value === undefined ? '—' : `${Math.round(100 * value)}%`);
+  const card = $('scorecard');
+  card.innerHTML = `
+    <div class="tiles">
+      ${tile('命中率', pct(human.precision_at_returned_k))}
+      ${tile('召回率', pct(human.approved_moment_recall))}
+      ${tile('认可区间', human.approved_count ?? 0)}
+      ${tile('匹配上', human.matched_count ?? 0)}
+      ${tile('切断语句', evaluation.cut_cue_count)}
+      ${tile('重复文本', evaluation.duplicate_text_count)}
+    </div>
+    <p class="rule">${trivial
+      ? '你认可了全部建议且没有补充，标注等于输出本身，这两个数必然是 100%——先勾掉选错的、补上漏掉的，数字才有意义。'
+      : '匹配规则：一对一时间区间 IoU ≥ 0.5。它衡量与你标注的时间一致性，不代替观看判断；只有相同素材、相同标注下比较不同参数才有可比性。'}</p>`;
+  card.classList.remove('hidden');
+}
+
+$('export-labels').addEventListener('click', () => {
+  if (!state.job) return;
+  const segments = state.job.result.selected_segments || [];
+  const accepted = acceptedSpans();
   const rejected = segments.filter((_, index) => !state.accepted.has(index))
     .map((span) => ({ start_time: round3(span.start_time), end_time: round3(span.end_time) }));
   const labels = {
@@ -774,6 +820,8 @@ function typeLabel(type) {
 function renderReviewCount() {
   const total = (state.job.result.selected_segments || []).length;
   $('review-count').textContent = `采用 ${state.accepted.size}/${total} 段建议 + ${state.manual.length} 段手动`;
+  // The card described the previous verdict; leaving it up would misreport.
+  $('scorecard').classList.add('hidden');
 }
 
 /* ── manual in/out marking ───────────────────────────────── */

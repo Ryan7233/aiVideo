@@ -140,6 +140,12 @@ node --check frontend/app.js
 
 ## 真实素材验收
 
+先在页面上做：勾掉选错的片段、用 I / O 补上漏掉的区间，点「评估这次选段」，命中率和召回率
+当场出来（`POST /evaluate/selection`，只读任务记录里的片段，不重跑媒体）。全部认可且没有补充时
+标注等于输出本身，指标必然是 100%，界面会直说这一点。
+
+要离线复算、或者把标注留档做版本对比，用「导出标注 JSON」拿到文件再跑脚本：
+
 ```bash
 python scripts/evaluate_clipping.py input_data/demo.mp4 \
   --topic 内容要点 --segments 3 --duration 25 \

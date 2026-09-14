@@ -190,9 +190,11 @@
 
     <div class="review">
       <span id="review-count" class="muted"></span>
+      <button class="primary small" id="evaluate" type="button">评估这次选段</button>
       <button class="ghost" id="export-labels" type="button">导出标注 JSON</button>
       <button class="ghost" id="copy-md" type="button">复制 Markdown</button>
-      <span class="hint">标注 = 勾选的建议片段 + 手动区间，喂给 <code>scripts/evaluate_clipping.py --annotations</code></span>
+      <span class="hint">勾掉选错的、补上漏掉的，再点评估：按时间区间 IoU ≥ 0.5 一对一匹配，算命中率和召回率</span>
+      <div class="scorecard hidden" id="scorecard"></div>
     </div>
 
   </div>
